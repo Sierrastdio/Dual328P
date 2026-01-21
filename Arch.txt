@@ -1,0 +1,13 @@
+[PC/Python] ←USB→ [Nano #1: Programmer/Loader]
+                        ↓ ROM 프로그래밍
+                   [28C256 ROM]
+                        ↓ A14 뱅크 분할
+                   ┌────┴────┐
+              [Core 1]   [Core 2]
+              (VM 실행)  (VM 실행)
+                   └────┬────┘
+                 데이터 버스
+                        ↓
+            [Nano #2: Display Monitor]
+                        ↓
+                   [LCD 디스플레이]
