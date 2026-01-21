@@ -1,7 +1,6 @@
-/*
+/* 핀배치 수정, 설계 수정 필요.
  * ============================================================================
  * Arduino Nano #2 - LCD Display Monitor
- * Data Display Unit (DDU)
  * ============================================================================
  * 
  * Role: Monitor data bus and display Core results on LCD in real-time
