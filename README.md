@@ -1,1 +1,1 @@
-![DST](https://github.com/Sierrastdio/DST/Images/DSTlogo.png)
+![DST](./Images/DSTlogo.png)
