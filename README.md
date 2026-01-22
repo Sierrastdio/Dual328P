@@ -1,4 +1,16 @@
-# 8-bit Dual Core System Hardware Specification (A14 Bank Switch Edition)
+# 8-bit Dual Core System Hardware Specification (Final Edition)
+
+## 시스템 개요
+
+본 시스템은 2개의 ATmega328P 코어가 ROM의 바이트코드를 병렬 실행하는 프로그래머블 듀얼코어 컴퓨터입니다.
+
+### 주요 구성
+- **Core 1, 2**: VM 펌웨어 실행 (ROM 바이트코드 해석)
+- **Nano #1**: 어셈블러 & ROM 프로그래머
+- **Nano #2**: LCD 디스플레이 모니터
+- **PC**: Python 어셈블러 인터페이스
+
+---
 
 ## 1. 전원 및 클럭 (Power & Clock)
 
@@ -12,17 +24,21 @@
 | **74HC125** | 3번 (Out) | Core 1의 9번 (XTAL1) | Core 1용 정제된 클럭 공급 |
 | **74HC125** | 6번 (Out) | Core 2의 9번 (XTAL1) | Core 2용 정제된 클럭 공급 |
 
+---
+
 ## 2. 컨트롤러 (ATmega328P)
 
 | 구분 | 기능 | 핀 번호 | 연결 대상 |
 |------|------|---------|-----------|
-| **Core 1** | 데이터 버스 | 4 ~ 6, 11 ~ 15 (PD2-PD7, PB0~PB1) | Core 1 데이터 버퍼 (A단: 2~9번) |
+| **Core 1** | 데이터 버스 | 4~6, 11~15 (PD2-PD7, PB0~PB1) | Core 1 데이터 버퍼 (A단: 2~9번) |
 | **Core 1** | 주소 버스(L) | 16~19, 23~25 (A0-A6) | Core 1 주소 버퍼 (A단: 2~8번) |
 | **Core 1** | 통행권 제어 | 27 (PC4) | Core 1의 데이터 버퍼, 주소 버퍼(19번) & 74HC04(1번) |
 | **Core 1** | 방향 제어 | 28 (PC5) | 모든 데이터 버퍼 (1번 DIR) |
-| **Core 2** | 데이터 버스 | 4 ~ 6, 11 ~ 15 (PD2-PD7, PB0~PB1) | Core 2 데이터 버퍼 (A단: 2~9번) |
+| **Core 2** | 데이터 버스 | 4~6, 11~15 (PD2-PD7, PB0~PB1) | Core 2 데이터 버퍼 (A단: 2~9번) |
 | **Core 2** | 주소 버스(L) | 16~19, 23~25 (A0-A6) | Core 2 주소 버퍼 (A단: 2~8번) |
 | **Core 2** | 입력모드 | 27 (PC4) | 본인소유 데이터 버퍼, 주소버퍼의 19번핀, 74HC04의 2번핀 |
+
+---
 
 ## 3. 74HC245 & 28C256 연결
 
@@ -71,8 +87,8 @@
 | 5 (E2) | GND | 활성화 |
 | 6 (E3) | VCC | 활성화 |
 | 15 (Y0) | 28C256 CE (Pin 20) | ROM 칩 선택 |
-| 14 (Y1) | Arduino Nano D10 | Core 1 Reg A 감지 |
-| 11 (Y4) | Arduino Nano A5 | Core 2 Reg A 감지 |
+| 14 (Y1) | Arduino Nano #2 D2 | Core 1 Reg A 감지 |
+| 11 (Y4) | Arduino Nano #2 D3 | Core 2 Reg A 감지 |
 
 ### 기타 연결
 
@@ -80,15 +96,19 @@
 - 74HC04 (2번 In) → core1 (27)
 - 74HC04 (3번 Out) → core2 (27), core2 데이터 버퍼 (19), core2 주소 버퍼(19)
 
+---
+
 ## 4. 28C256 제어 핀 설정
 
 | 핀 | 신호 | 연결 | 비고 |
 |----|------|------|------|
 | 20 | CE (Chip Enable) | 74HC138 Y0 (Pin 15) | Active LOW |
-| 22 | OE (Output Enable) | Arduino Nano D12 | Active LOW (나노 제어) |
-| 27 | WE (Write Enable) | Arduino Nano D13 | Active LOW (10kΩ 풀업) |
+| 22 | OE (Output Enable) | Arduino Nano #1 D12 | Active LOW (나노 제어) |
+| 27 | WE (Write Enable) | Arduino Nano #1 D13 | Active LOW (10kΩ 풀업) |
 
 **주의**: 코어 동작 중에는 OE=GND 고정, WE=VCC 고정. 나노 프로그래밍 시에만 제어.
+
+---
 
 ## 5. 방향 제어 신호 (DIR - PC5)
 
@@ -107,18 +127,20 @@
 | 부품 번호 | 부품 명칭 | 수량 | 주요 역할 |
 |----------|----------|------|----------|
 | **ATmega328P-PU** | 8-bit Microcontroller | **2** | 시스템 메인 코어 (Core 1, Core2) |
-| **74HC245** | Octal Bus Transceiver | **4** | 데이터 및 주소 버퍼 (코어당 2개씩 사용) |
+| **74HC245** | Octal Bus Transceiver | **5** | 데이터/주소 버퍼 (코어당 2개) + 나노#1 데이터 버퍼 1개 |
 | **74HC138** | 3-to-8 Line Decoder | **1** | I/O 레지스터 선택 및 ROM CE 제어 |
 | **74HC04** | Hex Inverter | **1** | Core 2 통행권 제어를 위한 신호 반전 |
 | **28C256** | 256K (32K x 8) EEPROM | **1** | 프로그램 저장 및 데이터 로드용 ROM |
-| **74HC595** | 8-bit Shift Register | **2** | 나노의 A0~A13 주소 확장 (14비트) |
+| **74HC595** | 8-bit Shift Register | **2** | 나노 #1의 A0~A13 주소 확장 (14비트) |
 | **74HC125** | Quad Buffer | **1** | 클럭 신호 버퍼링 |
 
 ## 2. 제어 및 통신용 보드
 
 | 부품 명칭 | 수량 | 주요 역할 |
 |----------|------|----------|
-| **Arduino Nano** | **1** | ROM 프로그래밍 및 레지스터 모니터링 |
+| **Arduino Nano #1** | **1** | ROM 프로그래머 & 어셈블러 |
+| **Arduino Nano #2** | **1** | LCD 디스플레이 모니터 |
+| **LCD 16x2** | **1** | 실시간 결과 표시 |
 
 ## 3. 수동 소자 및 기타 부품
 
@@ -126,32 +148,30 @@
 |----------|------|------|------|
 | **Crystal** | 16MHz | **1** | 두 코어의 클럭 동기화용 |
 | **Ceramic Capacitor** | 22pF | **2** | 크리스탈 발진 안정화용 |
-| **Ceramic Capacitor** | 0.1uF | **9** | 각 IC 전원 노이즈 제거용 (Bypass) |
+| **Ceramic Capacitor** | 0.1uF | **10** | 각 IC 전원 노이즈 제거용 (Bypass) |
 | **Electrolytic Cap** | 10uF ~ 47uF | **1** | 전체 회로 전원 평활용 |
 | **Resistor** | 10kΩ | **2** | 리셋 라인 풀업용, WE 풀업용 |
 | **Push Button** | 2-pin / 4-pin | **1** | 시스템 하드웨어 리셋용 |
-| **Breadboard / PCB** | - | **1** | 부품 실장 및 배선용 |
+| **Breadboard / PCB** | - | **2** | 부품 실장 및 배선용 |
 
 ---
 
-# Arduino Nano: I/O & Programmer Node Specification
+# Arduino Nano #1: ROM Programmer & Assembler
 
-아래 부분은 시스템 상태 모니터링 및 74HC595 시프트 레지스터를 이용한 28C256 ROM 라이팅 기능을 담당하는 Arduino Nano의 핀 맵을 정의합니다.
-
-## 1. Arduino Nano Pin Assignment
+## 1. Pin Assignment
 
 | Function | Pin | Signal | Target | Description |
 |----------|-----|--------|--------|-------------|
 | **Serial COM** | D0 | RX | PC/Laptop | USB Serial Communication |
 | | D1 | TX | PC/Laptop | USB Serial Communication |
-| **Data Bus** | D2 | D0 | System Data Bus D0 | Bus Sniffing & Programming |
-| | D3 | D1 | System Data Bus D1 | Bus Sniffing & Programming |
-| | D4 | D2 | System Data Bus D2 | Bus Sniffing & Programming |
-| | D5 | D3 | System Data Bus D3 | Bus Sniffing & Programming |
-| | D6 | D4 | System Data Bus D4 | Bus Sniffing & Programming |
-| | D7 | D5 | System Data Bus D5 | Bus Sniffing & Programming |
-| | D8 | D6 | System Data Bus D6 | Bus Sniffing & Programming |
-| | D9 | D7 | System Data Bus D7 | Bus Sniffing & Programming |
+| **Data Bus** | D2 | D0 | 74HC245 추가 버퍼 A2 | Bus Programming |
+| | D3 | D1 | 74HC245 추가 버퍼 A3 | Bus Programming |
+| | D4 | D2 | 74HC245 추가 버퍼 A4 | Bus Programming |
+| | D5 | D3 | 74HC245 추가 버퍼 A5 | Bus Programming |
+| | D6 | D4 | 74HC245 추가 버퍼 A6 | Bus Programming |
+| | D7 | D5 | 74HC245 추가 버퍼 A7 | Bus Programming |
+| | D8 | D6 | 74HC245 추가 버퍼 A8 | Bus Programming |
+| | D9 | D7 | 74HC245 추가 버퍼 A9 | Bus Programming |
 | **ROM Control** | D11 | A14 | 28C256 Pin 27 | Bank Selection (0=Core1, 1=Core2) |
 | | D12 | OE | 28C256 Pin 22 | Output Enable (Active LOW) |
 | | D13 | WE | 28C256 Pin 27 | Write Enable (Active LOW, 10kΩ Pull-up) |
@@ -159,14 +179,38 @@
 | (A0~A13) | A2 | SHCP | 74HC595 #1,2 Pin 11 | Shift Clock (Common) |
 | | A3 | STCP | 74HC595 #1,2 Pin 12 | Storage Clock / Latch (Common) |
 | **System Ctrl** | A0 | RESET | Core 1, 2 Pin 1 | System Halt for Bus Ownership |
-| **Status Mon.** | D10 | Y1 | 74HC138 Pin 14 | Core 1 Reg A (0x20) |
-| | A5 | Y4 | 74HC138 Pin 11 | Core 2 Reg A (0x20) |
+| **Buffer Ctrl** | D10 | DIR | 74HC245 추가 버퍼 Pin 1 | Data direction (LOW=A→B) |
 
-## 2. 74HC595 Daisy-Chain Configuration (14-bit Address A0~A13)
+## 2. 74HC245 추가 데이터 버퍼 (Nano #1 전용)
 
-나노의 핀 3개를 사용하여 28C256 ROM의 하위 주소선(A0~A13)을 제어합니다.
+이 버퍼는 나노가 ROM을 프로그래밍할 때 사용됩니다.
 
-### 2.1 First 74HC595 (#1: Lower Address A0 ~ A6)
+| 74HC245 핀 | 신호 | 연결 대상 |
+|-----------|------|-----------|
+| 1 (DIR) | 방향 제어 | Nano #1 D10 (LOW=A→B) |
+| 2 (A1) | D0 | Nano #1 D2 |
+| 3 (A2) | D1 | Nano #1 D3 |
+| 4 (A3) | D2 | Nano #1 D4 |
+| 5 (A4) | D3 | Nano #1 D5 |
+| 6 (A5) | D4 | Nano #1 D6 |
+| 7 (A6) | D5 | Nano #1 D7 |
+| 8 (A7) | D6 | Nano #1 D8 |
+| 9 (A8) | D7 | Nano #1 D9 |
+| 11 (B8) | D7 | 28C256 D7 (19번) |
+| 12 (B7) | D6 | 28C256 D6 (18번) |
+| 13 (B6) | D5 | 28C256 D5 (17번) |
+| 14 (B5) | D4 | 28C256 D4 (16번) |
+| 15 (B4) | D3 | 28C256 D3 (15번) |
+| 16 (B3) | D2 | 28C256 D2 (13번) |
+| 17 (B2) | D1 | 28C256 D1 (12번) |
+| 18 (B1) | D0 | 28C256 D0 (11번) |
+| 19 (OE) | 버퍼 활성화 | GND (항상 활성) |
+
+**역할**: 나노의 데이터 출력을 ROM 데이터 버스로 전달하며, 코어 버퍼와의 충돌 방지.
+
+## 3. 74HC595 Daisy-Chain Configuration (14-bit Address A0~A13)
+
+### 3.1 First 74HC595 (#1: Lower Address A0 ~ A6)
 
 | Pin | Signal | Target | Description |
 |-----|--------|--------|-------------|
@@ -179,13 +223,13 @@
 | 6 (Q6) | A6 | 28C256 A6 (Pin 4) | Address Bit 6 |
 | 7 (Q7) | N/C | - | Not Used (cascaded to #2) |
 | 9 | Q7S | **74HC595 #2 Pin 14** | **Serial Data Out (To Next Chip)** |
-| 11 | SHCP | Nano A2 | Shift Clock |
-| 12 | STCP | Nano A3 | Latch Clock |
-| 14 | DS | **Nano A1** | Serial Data Input |
+| 11 | SHCP | Nano #1 A2 | Shift Clock |
+| 12 | STCP | Nano #1 A3 | Latch Clock |
+| 14 | DS | **Nano #1 A1** | Serial Data Input |
 | 10 | MR | VCC | Master Reset (disabled) |
 | 13 | OE | GND | Output Enable (always on) |
 
-### 2.2 Second 74HC595 (#2: Upper Address A7 ~ A13)
+### 3.2 Second 74HC595 (#2: Upper Address A7 ~ A13)
 
 | Pin | Signal | Target | Description |
 |-----|--------|--------|-------------|
@@ -198,181 +242,161 @@
 | 6 (Q6) | A13 | 28C256 A13 (Pin 26) | Address Bit 13 |
 | 7 (Q7) | N/C | - | Not Used |
 | 9 | Q7S | N/C | Not Used |
-| 11 | SHCP | Nano A2 | Shift Clock |
-| 12 | STCP | Nano A3 | Latch Clock |
+| 11 | SHCP | Nano #1 A2 | Shift Clock |
+| 12 | STCP | Nano #1 A3 | Latch Clock |
 | 14 | DS | **74HC595 #1 Pin 9** | **Serial Data In (From Prev Chip)** |
 | 10 | MR | VCC | Master Reset (disabled) |
 | 13 | OE | GND | Output Enable (always on) |
 
-**주의**: A14는 74HC595가 아닌 나노의 D11 핀으로 직접 제어합니다.
+---
 
-## 3. Implementation Notes
+# Arduino Nano #2: LCD Display Monitor
 
-1. **Hardware Safety**: 28C256의 WE(27번) 핀에는 반드시 **10kΩ 풀업 저항**을 연결하여 전원 인가 시 의도치 않은 쓰기 동작을 방지합니다.
+## 1. Pin Assignment
 
-2. **Daisy-Chain**: 데이터는 `#2(MSB)`에서 `#1(LSB)` 순서로 밀어넣거나, 코드 상에서 `shiftOut` 순서를 조정하여 주소 정렬을 맞춥니다.
+| Function | Pin | Signal | Target | Description |
+|----------|-----|--------|--------|-------------|
+| **Data Bus** | A0 | D0 | 28C256 D0 (Pin 11) | Bus Monitoring (Read-Only) |
+| (Read-Only) | A1 | D1 | 28C256 D1 (Pin 12) | Bus Monitoring (Read-Only) |
+| | A2 | D2 | 28C256 D2 (Pin 13) | Bus Monitoring (Read-Only) |
+| | A3 | D3 | 28C256 D3 (Pin 15) | Bus Monitoring (Read-Only) |
+| | D8 | D4 | 28C256 D4 (Pin 16) | Bus Monitoring (Read-Only) |
+| | D9 | D5 | 28C256 D5 (Pin 17) | Bus Monitoring (Read-Only) |
+| | D10 | D6 | 28C256 D6 (Pin 18) | Bus Monitoring (Read-Only) |
+| | D11 | D7 | 28C256 D7 (Pin 19) | Bus Monitoring (Read-Only) |
+| **Core Detect** | D2 | Y1 | 74HC138 Pin 14 | Core 1 Reg A Detection |
+| | D3 | Y4 | 74HC138 Pin 11 | Core 2 Reg A Detection |
+| **LCD (4-bit)** | D12 | RS | LCD RS | Register Select |
+| | D13 | EN | LCD EN | Enable |
+| | D4 | D4 | LCD D4 | Data 4 |
+| | D5 | D5 | LCD D5 | Data 5 |
+| | D6 | D6 | LCD D6 | Data 6 |
+| | D7 | D7 | LCD D7 | Data 7 |
+| | GND | RW | LCD RW | Read/Write (Always Write) |
 
-3. **Address Generation**: 나노가 ROM 프로그래밍 시:
-   - A0~A6: 74HC595 #1로 제어
-   - A7~A13: 74HC595 #2로 제어
-   - A14: D11 핀으로 직접 제어
-
-4. **Bus Conflict**: 나노가 롬에 데이터를 쓸 때는 반드시:
-   - **A0(RESET)**를 LOW로 떨어뜨려 코어들을 정지
-   - **D12(OE)**를 HIGH로 올려 롬의 출력을 차단
-
-5. **Bank Switching**: 나노가 코어 실행 중 A0~A13을 변경하려면:
-   - RESET=LOW (코어 정지)
-   - 74HC595로 새로운 A0~A13 값 설정
-   - RESET=HIGH (코어 재시작)
-   - 코어는 새로운 128바이트 블록에 접근
-
-## 4. ROM Data & Memory Map (Updated)
-
-### 4.1 Memory Segmentation (A14 Bank Division)
-
-32KB 주소 공간을 A14 핀으로 물리적으로 분할합니다.
-
-| 물리 주소 | Bank | Core | 접근 방식 |
-|----------|------|------|----------|
-| **0x0000 ~ 0x3FFF** | 0 (A14=GND) | Core 1 전용 | 코어: A0~A6 제어, 나노: A0~A13 완전 제어 |
-| **0x4000 ~ 0x7FFF** | 1 (A14=VCC) | Core 2 전용 | 코어: A0~A6 제어, 나노: A0~A13 완전 제어 |
-
-### 4.2 코어의 주소 접근 방식
-
-각 코어는 7비트 주소(A0~A6)만 제어하므로, 한 번에 128바이트 블록만 접근 가능합니다.
-
-**예시**: Core 1이 더 많은 데이터에 접근하려면
-
-```
-나노 동작:
-1. RESET=LOW (Core 1 정지)
-2. 74HC595로 A0~A13 = 0x0000 (0x0000~0x007F 블록 선택)
-3. RESET=HIGH (Core 1 시작)
-4. Core 1은 0x00~0x7F 주소로 0x0000~0x007F 접근
-
-...작업 완료 후...
-
-5. RESET=LOW
-6. 74HC595로 A0~A13 = 0x0080 (0x0080~0x00FF 블록 선택)
-7. RESET=HIGH
-8. Core 1은 0x00~0x7F 주소로 0x0080~0x00FF 접근
-```
-
-이 방식으로 전체 16KB에 순차 접근 가능합니다.
-
-### 4.3 I/O Mapped Address (74HC138 Decoder)
-
-74HC138 디코더는 A5, A6만 사용하므로 I/O 주소는 다음과 같이 재매핑됩니다:
-
-| 주소 (7비트) | A6 | A5 | 138 출력 | 기능 | 나노 핀 |
-|-------------|----|----|---------|------|---------|
-| **0x00** | 0 | 0 | Y0 | ROM CE | - |
-| **0x20** | 0 | 1 | Y1 | Core 1 Reg A | D10 |
-| **0x20** | 0 | 1 | Y4 | Core 2 Reg A | A5 |
-
-**주의**: Core 1과 Core 2의 레지스터 주소가 동일하지만, A14 뱅크로 물리적으로 분리되어 충돌하지 않습니다.
-
-### 4.4 Test Data Configuration
-
-1. **Core 1 (Master)**: 
-   - 0x0000~0x007F: 선형 증가 데이터 [0x00, 0x01, 0x02, ...]
-   - 나노가 전체 16KB에 자유롭게 데이터 기록 가능
-
-2. **Core 2 (Slave)**: 
-   - 0x4000~0x407F: 제곱 값 LUT [0x00, 0x01, 0x04, 0x09, ...]
-   - 나노가 전체 16KB에 자유롭게 데이터 기록 가능
+**주의**: LCD는 4-bit 모드로 연결하며, RW는 GND에 고정합니다.
 
 ---
 
 # System Operation Workflow
 
-본 문서는 노트북 명령 전달부터 ROM 기록, 듀얼 코어 병렬 연산 및 결과 리포팅까지의 전체 데이터 흐름을 정의합니다.
+## 1. Phase 1: Assembly Programming (PC → Nano #1 → ROM)
 
-## 1. Phase 1: ROM Programming (Laptop → Nano → ROM)
+사용자가 Python으로 어셈블리 프로그램을 작성하여 ROM에 기록하는 단계입니다.
 
-사용자가 작성한 바이너리 데이터를 ROM(28C256)의 특정 주소에 기록하는 단계입니다.
+### 1.1 Python에서 어셈블리 작성
+```assembly
+; program.asm
+LOAD 10
+ADD 5
+MUL 2
+OUT
+HALT
+```
 
-1. **Command Input**: 사용자가 노트북 시리얼 모니터에 쓰기 명령을 입력합니다.
-   - 예: `W 0x1234 0xFF`
+### 1.2 Python 어셈블러가 시리얼로 전송
+```
+ASM 1 LOAD 10
+ASM 1 ADD 5
+ASM 1 MUL 2
+ASM 1 OUT
+ASM 1 HALT
+COMPILE
+LOAD 0
+RUN
+```
 
-2. **System Halt**: 나노가 **A0(RESET)**를 LOW로 유지하여 Core 1, 2의 동작을 멈추고 버스 점유권을 획득합니다.
+### 1.3 Nano #1이 바이트코드 변환 & ROM 기록
+```
+0x00: 0x1A  ; LOAD 10
+0x01: 0x25  ; ADD 5
+0x02: 0x42  ; MUL 2
+0x03: 0x70  ; OUT
+0x04: 0xF0  ; HALT
+```
 
-3. **Address Setup**:
-   - **A0~A13**: 74HC595 #1, #2로 14비트 완전 제어
-   - **A14**: D11 핀으로 뱅크 선택 (0=Core1 영역, 1=Core2 영역)
+## 2. Phase 2: Core Execution (ROM → Cores)
 
-4. **Data Bus Setup**: 나노가 데이터 버스(**D2~D9**)에 기록할 값(0xFF)을 출력합니다.
+두 코어가 각자의 뱅크에서 VM 바이트코드를 실행합니다.
 
-5. **Write Pulse**: 
-   - **D12(OE)**를 HIGH로 올림 (ROM 출력 차단)
-   - **D13(WE)** 핀에 LOW 펄스를 인가하여 롬에 데이터를 기록 (약 10ms 대기)
+### 2.1 Fetch-Decode-Execute Cycle
+```cpp
+while(!halted) {
+    instruction = fetch_from_ROM(PC);
+    execute(instruction);
+    PC++;
+}
+```
 
-6. **Verification**: 
-   - **D12(OE)**를 LOW로 활성화하여 기록된 데이터를 검증
-   - 노트북으로 완료 메시지 전송
+### 2.2 결과 출력
+```cpp
+// 주소 0x20에 쓰기 → 74HC138 Y1/Y4 활성화
+output_register(0x20, regA);
+```
 
-## 2. Phase 2: Bank Switching for Extended Access
+## 3. Phase 3: Display Monitoring (Cores → Nano #2 → LCD)
 
-코어가 128바이트 이상의 데이터에 접근해야 할 때, 나노가 뱅크를 전환합니다.
+연산 결과를 LCD에 실시간 표시합니다.
 
-1. **Initial Setup**:
-   - 나노가 74HC595로 A0~A13 = 0x0000 설정
-   - RESET=HIGH로 코어 시작
-   - 코어는 0x0000~0x007F (Core1) 또는 0x4000~0x407F (Core2) 블록 접근
+### 3.1 신호 감지
+```
+74HC138 Y1 LOW → Core 1 결과 출력
+74HC138 Y4 LOW → Core 2 결과 출력
+```
 
-2. **Bank Switch**:
-   - 코어가 현재 블록 처리 완료
-   - 나노가 RESET=LOW (코어 정지)
-   - 74HC595로 A0~A13 = 0x0080 설정 (다음 블록)
-   - RESET=HIGH (코어 재시작)
-   - 코어는 0x0080~0x00FF (Core1) 또는 0x4080~0x40FF (Core2) 블록 접근
+### 3.2 LCD 표시
+```
+C1:015  C2:030
+[====75%====]
+```
 
-3. **Repeat**: 필요한 만큼 뱅크 전환 반복하여 전체 16KB 접근
+## 4. Operation Modes Summary
 
-## 3. Phase 3: Parallel Execution (ROM → Cores)
+| Mode | Nano #1 | Nano #2 | Cores | Bus Owner |
+|------|---------|---------|-------|-----------|
+| **Programming** | 어셈블러 동작 | 대기 | Halted | Nano #1 |
+| **Execution** | 대기 | 모니터링 | Running | Cores |
+| **Display** | 대기 | LCD 출력 | Running | Cores |
 
-두 코어가 각자의 뱅크에서 병렬로 데이터를 읽고 연산을 수행합니다.
+---
 
-1. **Bus Release**: 나노가 **A0(RESET)**를 HIGH로 복구합니다.
+# I/O Mapped Address (74HC138 Decoder)
 
-2. **Concurrent Access**:
-   - **Core 1 (Master)**: A14=0 뱅크(0x0000~)에서 데이터 읽기
-   - **Core 2 (Slave)**: A14=1 뱅크(0x4000~)에서 데이터 읽기
-   - 물리적으로 분리된 뱅크이므로 **동시 접근 가능**
+74HC138 디코더는 A5, A6만 사용하므로 I/O 주소는 다음과 같이 재매핑됩니다:
 
-3. **Bus Arbitration**: 
-   - 74HC04와 PC4(Control) 신호로 버퍼 방향 제어
-   - Core 1이 마스터로 버스 타이밍 주도
+| 주소 (7비트) | A6 | A5 | 138 출력 | 기능 | 나노 #2 핀 |
+|-------------|----|----|---------|------|-----------|
+| **0x00** | 0 | 0 | Y0 | ROM CE | - |
+| **0x20** | 0 | 1 | Y1 | Core 1 Reg A | D2 |
+| **0x20** | 0 | 1 | Y4 | Core 2 Reg A | D3 |
 
-## 4. Phase 4: Status Reporting (Core → Nano → Laptop)
+**주의**: Core 1과 Core 2의 레지스터 주소가 동일(0x20)하지만, A14 뱅크로 물리적으로 분리되어 충돌하지 않습니다.
 
-연산 결과를 나노가 감지하여 노트북으로 출력합니다.
+---
 
-1. **I/O Mapped Write**: 
-   - Core 1이 결과 출력: 주소 **0x20** (Reg A)
-   - Core 2가 결과 출력: 주소 **0x20** (Reg A, 다른 뱅크)
+# Instruction Set Architecture
 
-2. **Device Selection**: 
-   - **74HC138** 디코더가 A5=1, A6=0을 감지
-   - Core 1: **Y1(Pin 14)** 신호를 LOW로 활성화
-   - Core 2: **Y4(Pin 11)** 신호를 LOW로 활성화
+## 명령어 형식 (8-bit)
+```
+OOOO DDDD
+│    │
+│    └─ 데이터/피연산자 (4비트, 0~15)
+└────── 명령 코드 (4비트)
+```
 
-3. **Bus Sniffing**: 
-   - 나노가 **D10(Y1)** 또는 **A5(Y4)**의 LOW 신호 감지
-   - 즉시 데이터 버스(D2~D9)의 값을 읽음
+## 명령어 목록
 
-4. **Serial Reporting**: 
-   - 나노가 읽은 값을 시리얼로 출력
-   - 예: `[CORE1] REG A: 0xFD`
-
-## 5. Operation Modes Summary
-
-| Mode | Nano Status | Core Status | Bus Owner | A0~A13 Control |
-|------|-------------|-------------|-----------|----------------|
-| **Programmer** | Output (WE/Address/Data) | Halted (Hi-Z) | Arduino Nano | 74HC595 x2 |
-| **Monitor** | Input (Data Sniffing) | Running | Core 1 & 2 | 고정값 유지 |
-| **Bank Switch** | RESET Control | Halted | Arduino Nano | 74HC595 x2 재설정 |
+| 코드 | 니모닉 | 설명 | 예시 |
+|------|--------|------|------|
+| 0x0D | NOP | No Operation | 0x00 |
+| 0x1D | LOAD D | A = D | 0x15 (A=5) |
+| 0x2D | ADD D | A = A + D | 0x23 (A=A+3) |
+| 0x3D | SUB D | A = A - D | 0x32 (A=A-2) |
+| 0x4D | MUL D | A = A * D | 0x42 (A=A*2) |
+| 0x5D | AND D | A = A & D | 0x5F (A=A&15) |
+| 0x6D | OR D | A = A \| D | 0x61 (A=A\|1) |
+| 0x70 | OUT | RegA 출력 | 0x70 |
+| 0xF0 | HALT | 실행 정지 | 0xF0 |
 
 ---
 
@@ -380,17 +404,24 @@
 
 ## 핵심 설계 사항
 
+- **Programmable VM**: 코어는 고정 펌웨어, 프로그램은 ROM에 저장
 - **A14 Bank Division**: 물리적 뱅크 분할로 완벽한 메모리 격리
 - **Full 15-bit Addressing**: 74HC595 2개로 A0~A13 완전 제어, D11로 A14 제어
-- **Data Integrity**: PORTD, PORTB를 데이터 버스로 할당하여 고속 병렬 처리 보장
-- **I/O Offloading**: 제3의 모니터 아두이노를 통한 시스템 상태 관제로 코어 부하 제로화
-- **Conflict Prevention**: 
-  - A14 하드와이어로 물리적 뱅크 격리
-  - 74HC04 인버터 기반의 배타적 버스 점유 시스템
-- **Dynamic Bank Switching**: 나노가 RESET 제어로 코어의 접근 블록 동적 변경 가능
+- **Dual Arduino System**: 
+  - Nano #1: 프로그래밍 전용
+  - Nano #2: 모니터링 전용
+- **LCD Real-time Display**: 실행 결과 즉시 표시
+- **Python Development Environment**: PC에서 편리한 프로그래밍
 
 ## 주요 개선점
 
-1. **74HC595 1개 → 2개**: A0~A13 완전 제어로 바이트 단위 프로그래밍 가능
-2. **A14 물리 분할**: 코어 간 메모리 충돌 원천 차단
-3. **I/O 주소 재매핑**: 0x20으로 단순화
+1. **74HC245 +1개**: 나노 #1 데이터 버퍼 추가로 버스 충돌 완전 방지
+2. **74HC595 2개**: A0~A13 완전 제어로 바이트 단위 프로그래밍 가능
+3. **A14 물리 분할**: 코어 간 메모리 충돌 원천 차단
+4. **I/O 주소 재매핑**: 0x20으로 단순화
+5. **VM 아키텍처**: 펌웨어 한 번 업로드, 프로그램은 ROM에서
+6. **Python 개발 환경**: 어셈블리 작성 및 업로드 자동화
+
+## 결론
+
+본 설계는 ATmega328P를 진짜 프로그래머블 CPU로 사용하는 듀얼코어 컴퓨터 시스템입니다. 사용자는 ROM에 프로그램만 작성하면 되며, Python 인터페이스로 편리하게 개발할 수 있습니다.
