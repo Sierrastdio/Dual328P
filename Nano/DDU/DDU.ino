@@ -1,162 +1,218 @@
-/* 핀배치 수정, 설계 수정 필요.
+/* 
  * ============================================================================
- * Arduino Nano #2 - LCD Display Monitor
+ * Arduino Nano #2 - GLCD Display Monitor with 74HC165
  * ============================================================================
  * 
- * Role: Monitor data bus and display Core results on LCD in real-time
+ * Role: Monitor address/data bus via 74HC165 and display on GLCD
  * 
  * Hardware Connections:
  * ---------------------
- * Data Bus (Read-Only):
- *   A0~A3 (14~17) -> 28C256 D0~D3
- *   D8~D11        -> 28C256 D4~D7
+ * 74HC165 Chain (2 chips daisy-chained):
+ *   74HC165 #1 (Data Bus D0~D7):
+ *     D0~D7 -> 28C256 D0~D7 (parallel input)
+ *     Q7 -> 74HC165 #2 DS (serial cascade)
+ *   
+ *   74HC165 #2 (Address Bus A0~A6):
+ *     A0~A6 -> 28C256 A0~A6 (parallel input)
+ *     A7 -> GND (unused)
  * 
+ * Control Pins:
+ *   A0 -> SH/LD (Shift/Load) - both chips
+ *   A1 -> CLK (Clock) - both chips
+ *   A2 -> DS (Serial Data from #2 Q7)
+ *   
  * Core Output Detection:
- *   D2 -> 74HC138 Y1 (Core 1 Reg A - 0x20)
- *   D3 -> 74HC138 Y4 (Core 2 Reg A - 0x20)
+ *   D2 -> 74HC138 Y1 (Core 1 Reg A)
+ *   D3 -> 74HC138 Y4 (Core 2 Reg A)
  * 
- * LCD (16x2, 4-bit mode):
- *   D4 -> LCD D4
- *   D5 -> LCD D5
- *   D6 -> LCD D6
- *   D7 -> LCD D7
- *   D12 -> LCD RS
- *   D13 -> LCD EN
- *   GND -> LCD RW
+ * GLCD ST7920 128x64 (Software SPI):
+ *   D13 -> CLK
+ *   D11 -> Data
+ *   D10 -> CS
+ *   D8  -> Reset
  * 
- * Display Format:
+ * Display Layout:
  * ---------------
- * C1:123  C2:045
- * [====75%====]
+ * ┌────────────────────────┐
+ * │ Dual-Core Monitor v2.0 │
+ * ├────────────────────────┤
+ * │ Core 1:                │
+ * │   Addr: 0x1A           │
+ * │   Data: 0x08 (8)       │
+ * │                        │
+ * │ Core 2:                │
+ * │   Addr: 0x05           │
+ * │   Data: 0x10 (16)      │
+ * │                        │
+ * │ Total: C1:42 C2:38     │
+ * └────────────────────────┘
  * 
  * ============================================================================
  */
 
-#include <LiquidCrystal.h>
+#include <U8g2lib.h>
+
+// ============================================================================
+// GLCD Setup (270° rotation, Software SPI)
+// ============================================================================
+// CLK=13, Data=11, CS=10, Reset=8
+U8G2_ST7920_128X64_1_SW_SPI u8g2(U8G2_R3, 13, 11, 10, 8);
 
 // ============================================================================
 // Pin Definitions
 // ============================================================================
 
-// Data Bus Input (8-bit)
-const uint8_t DATA_D0 = A0;  // D0
-const uint8_t DATA_D1 = A1;  // D1
-const uint8_t DATA_D2 = A2;  // D2
-const uint8_t DATA_D3 = A3;  // D3
-const uint8_t DATA_D4 = 8;   // D4
-const uint8_t DATA_D5 = 9;   // D5
-const uint8_t DATA_D6 = 10;  // D6
-const uint8_t DATA_D7 = 11;  // D7
+// 74HC165 Control Pins
+const uint8_t HC165_LOAD = A0;   // SH/LD (Shift/Load, Active LOW)
+const uint8_t HC165_CLK  = A1;   // Clock
+const uint8_t HC165_DATA = A2;   // Serial Data Input (from #2 Q7)
 
 // Core Output Detection
-const uint8_t CORE1_SIGNAL = 2;  // Y1 (Active LOW)
-const uint8_t CORE2_SIGNAL = 3;  // Y4 (Active LOW)
-
-// LCD Pins (4-bit mode)
-const uint8_t LCD_RS = 12;
-const uint8_t LCD_EN = 13;
-const uint8_t LCD_D4 = 4;
-const uint8_t LCD_D5 = 5;
-const uint8_t LCD_D6 = 6;
-const uint8_t LCD_D7 = 7;
-
-// ============================================================================
-// LCD Object
-// ============================================================================
-LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+const uint8_t CORE1_SIGNAL = 2;  // 74HC138 Y1 (Active LOW)
+const uint8_t CORE2_SIGNAL = 3;  // 74HC138 Y4 (Active LOW)
 
 // ============================================================================
 // Display State
 // ============================================================================
-uint8_t last_core1_value = 0;
-uint8_t last_core2_value = 0;
+uint8_t last_core1_addr = 0;
+uint8_t last_core1_data = 0;
+uint8_t last_core2_addr = 0;
+uint8_t last_core2_data = 0;
+
 uint16_t core1_count = 0;
 uint16_t core2_count = 0;
+
 unsigned long last_update = 0;
 bool display_needs_update = false;
-
-// Progress tracking
-uint16_t expected_total = 256;  // Expected number of results
-uint8_t progress_percent = 0;
+bool system_running = false;
 
 // ============================================================================
-// Data Bus Reading
+// 74HC165 Chain Reading (16-bit: 7-bit Address + 8-bit Data + 1 unused)
 // ============================================================================
 
-uint8_t readDataBus() {
-    uint8_t data = 0;
+/**
+ * Read 16-bit from daisy-chained 74HC165 chips
+ * Returns: [15:9] = Address A0~A6, [7:0] = Data D0~D7
+ */
+uint16_t read74HC165Chain() {
+    uint16_t result = 0;
     
-    // Read lower 4 bits (A0~A3)
-    if(digitalRead(DATA_D0) == HIGH) data |= 0x01;
-    if(digitalRead(DATA_D1) == HIGH) data |= 0x02;
-    if(digitalRead(DATA_D2) == HIGH) data |= 0x04;
-    if(digitalRead(DATA_D3) == HIGH) data |= 0x08;
+    // 1. Load parallel data (Active LOW)
+    digitalWrite(HC165_LOAD, LOW);
+    delayMicroseconds(5);
+    digitalWrite(HC165_LOAD, HIGH);
+    delayMicroseconds(5);
     
-    // Read upper 4 bits (D8~D11)
-    if(digitalRead(DATA_D4) == HIGH) data |= 0x10;
-    if(digitalRead(DATA_D5) == HIGH) data |= 0x20;
-    if(digitalRead(DATA_D6) == HIGH) data |= 0x40;
-    if(digitalRead(DATA_D7) == HIGH) data |= 0x80;
-    
-    return data;
-}
-
-// ============================================================================
-// LCD Display Functions
-// ============================================================================
-
-void updateDisplay() {
-    // Line 1: Core values
-    lcd.setCursor(0, 0);
-    lcd.print("C1:");
-    if(last_core1_value < 100) lcd.print(" ");
-    if(last_core1_value < 10) lcd.print(" ");
-    lcd.print(last_core1_value);
-    
-    lcd.print("  C2:");
-    if(last_core2_value < 100) lcd.print(" ");
-    if(last_core2_value < 10) lcd.print(" ");
-    lcd.print(last_core2_value);
-    
-    // Line 2: Progress bar
-    lcd.setCursor(0, 1);
-    lcd.print("[");
-    
-    uint16_t total_results = core1_count + core2_count;
-    progress_percent = (total_results * 100) / expected_total;
-    if(progress_percent > 100) progress_percent = 100;
-    
-    // Draw progress bar (14 characters)
-    uint8_t filled = (progress_percent * 14) / 100;
-    for(uint8_t i = 0; i < 14; i++) {
-        lcd.print(i < filled ? "=" : " ");
+    // 2. Shift out 16 bits
+    for(uint8_t i = 0; i < 16; i++) {
+        // Read bit
+        uint8_t bit = digitalRead(HC165_DATA);
+        result = (result << 1) | bit;
+        
+        // Clock pulse
+        digitalWrite(HC165_CLK, HIGH);
+        delayMicroseconds(2);
+        digitalWrite(HC165_CLK, LOW);
+        delayMicroseconds(2);
     }
-    lcd.print("]");
+    
+    return result;
 }
 
-void showWelcome() {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Dual-Core");
-    lcd.setCursor(0, 1);
-    lcd.print("Monitor Ready");
-    delay(2000);
-    lcd.clear();
+/**
+ * Extract address from 16-bit chain data
+ */
+uint8_t extractAddress(uint16_t chain_data) {
+    return (chain_data >> 9) & 0x7F;  // bits [15:9]
 }
 
-void showStats() {
-    lcd.clear();
-    lcd.setCursor(0, 0);
-    lcd.print("Total: ");
-    lcd.print(core1_count + core2_count);
-    lcd.setCursor(0, 1);
-    lcd.print("C1:");
-    lcd.print(core1_count);
-    lcd.print(" C2:");
-    lcd.print(core2_count);
-    delay(3000);
-    lcd.clear();
-    display_needs_update = true;
+/**
+ * Extract data from 16-bit chain data
+ */
+uint8_t extractData(uint16_t chain_data) {
+    return chain_data & 0xFF;  // bits [7:0]
+}
+
+// ============================================================================
+// GLCD Display Functions
+// ============================================================================
+
+void drawDisplay() {
+    u8g2.firstPage();
+    do {
+        // Title bar
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawStr(0, 8, "Dual-Core Monitor");
+        u8g2.drawHLine(0, 10, 128);
+        
+        // Core 1 Section
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawStr(0, 20, "Core 1:");
+        
+        u8g2.setFont(u8g2_font_5x7_tf);
+        char buf[20];
+        
+        sprintf(buf, "Addr: 0x%02X", last_core1_addr);
+        u8g2.drawStr(8, 28, buf);
+        
+        sprintf(buf, "Data: 0x%02X (%d)", last_core1_data, last_core1_data);
+        u8g2.drawStr(8, 36, buf);
+        
+        // Core 2 Section
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawStr(0, 46, "Core 2:");
+        
+        u8g2.setFont(u8g2_font_5x7_tf);
+        
+        sprintf(buf, "Addr: 0x%02X", last_core2_addr);
+        u8g2.drawStr(8, 54, buf);
+        
+        sprintf(buf, "Data: 0x%02X (%d)", last_core2_data, last_core2_data);
+        u8g2.drawStr(8, 62, buf);
+        
+        // Bottom status bar
+        u8g2.drawHLine(0, 11, 128);
+        
+    } while(u8g2.nextPage());
+}
+
+void drawWelcome() {
+    u8g2.firstPage();
+    do {
+        u8g2.setFont(u8g2_font_9x15_tf);
+        u8g2.drawStr(10, 25, "Dual-Core");
+        u8g2.drawStr(8, 45, "System v2.0");
+    } while(u8g2.nextPage());
+}
+
+void drawStats() {
+    u8g2.firstPage();
+    do {
+        u8g2.setFont(u8g2_font_9x15_tf);
+        u8g2.drawStr(20, 15, "Statistics");
+        
+        u8g2.setFont(u8g2_font_6x10_tf);
+        char buf[30];
+        
+        sprintf(buf, "Total: %d", core1_count + core2_count);
+        u8g2.drawStr(10, 35, buf);
+        
+        sprintf(buf, "Core 1: %d", core1_count);
+        u8g2.drawStr(10, 48, buf);
+        
+        sprintf(buf, "Core 2: %d", core2_count);
+        u8g2.drawStr(10, 61, buf);
+        
+    } while(u8g2.nextPage());
+}
+
+void drawIdleScreen() {
+    u8g2.firstPage();
+    do {
+        u8g2.setFont(u8g2_font_6x10_tf);
+        u8g2.drawStr(15, 30, "Waiting for");
+        u8g2.drawStr(10, 45, "Program Start...");
+    } while(u8g2.nextPage());
 }
 
 // ============================================================================
@@ -166,32 +222,54 @@ void showStats() {
 void monitorCores() {
     bool updated = false;
     
-    // Check Core 1 output
+    // Check Core 1 output (Y1 Active LOW)
     if(digitalRead(CORE1_SIGNAL) == LOW) {
-        uint8_t value = readDataBus();
-        last_core1_value = value;
+        // Read bus data via 74HC165 chain
+        uint16_t bus_data = read74HC165Chain();
+        
+        last_core1_addr = extractAddress(bus_data);
+        last_core1_data = extractData(bus_data);
         core1_count++;
         updated = true;
+        system_running = true;
         
-        // Also send to Serial for logging
-        Serial.print(F("[C1] "));
-        Serial.println(value);
+        // Serial logging
+        Serial.print(F("[C1] Addr:0x"));
+        if(last_core1_addr < 0x10) Serial.print("0");
+        Serial.print(last_core1_addr, HEX);
+        Serial.print(F(" Data:0x"));
+        if(last_core1_data < 0x10) Serial.print("0");
+        Serial.print(last_core1_data, HEX);
+        Serial.print(F(" ("));
+        Serial.print(last_core1_data);
+        Serial.println(F(")"));
         
-        delay(5);  // Debounce
+        delay(10);  // Debounce
     }
     
-    // Check Core 2 output
+    // Check Core 2 output (Y4 Active LOW)
     if(digitalRead(CORE2_SIGNAL) == LOW) {
-        uint8_t value = readDataBus();
-        last_core2_value = value;
+        // Read bus data via 74HC165 chain
+        uint16_t bus_data = read74HC165Chain();
+        
+        last_core2_addr = extractAddress(bus_data);
+        last_core2_data = extractData(bus_data);
         core2_count++;
         updated = true;
+        system_running = true;
         
-        // Also send to Serial for logging
-        Serial.print(F("[C2] "));
-        Serial.println(value);
+        // Serial logging
+        Serial.print(F("[C2] Addr:0x"));
+        if(last_core2_addr < 0x10) Serial.print("0");
+        Serial.print(last_core2_addr, HEX);
+        Serial.print(F(" Data:0x"));
+        if(last_core2_data < 0x10) Serial.print("0");
+        Serial.print(last_core2_data, HEX);
+        Serial.print(F(" ("));
+        Serial.print(last_core2_data);
+        Serial.println(F(")"));
         
-        delay(5);  // Debounce
+        delay(10);  // Debounce
     }
     
     if(updated) {
@@ -205,49 +283,65 @@ void monitorCores() {
 
 void setup() {
     Serial.begin(115200);
-    Serial.println(F("\n=== LCD Display Monitor Started ===\n"));
+    Serial.println(F("\n=== 74HC165 GLCD Monitor Started ==="));
+    Serial.println(F("Commands: S=Stats, R=Reset, T=Test\n"));
     
-    // Initialize LCD
-    lcd.begin(16, 2);
-    lcd.clear();
+    // Initialize GLCD
+    u8g2.begin();
+    u8g2.setContrast(128);  // Adjust as needed (0-255)
     
-    // Configure data bus pins as INPUT
-    pinMode(DATA_D0, INPUT);
-    pinMode(DATA_D1, INPUT);
-    pinMode(DATA_D2, INPUT);
-    pinMode(DATA_D3, INPUT);
-    pinMode(DATA_D4, INPUT);
-    pinMode(DATA_D5, INPUT);
-    pinMode(DATA_D6, INPUT);
-    pinMode(DATA_D7, INPUT);
+    // Configure 74HC165 control pins
+    pinMode(HC165_LOAD, OUTPUT);
+    pinMode(HC165_CLK, OUTPUT);
+    pinMode(HC165_DATA, INPUT);
+    
+    digitalWrite(HC165_LOAD, HIGH);  // Idle state
+    digitalWrite(HC165_CLK, LOW);    // Idle state
     
     // Configure core signal pins as INPUT with pull-up
     pinMode(CORE1_SIGNAL, INPUT_PULLUP);
     pinMode(CORE2_SIGNAL, INPUT_PULLUP);
     
     // Show welcome message
-    showWelcome();
+    drawWelcome();
+    delay(2000);
     
     // Initial display
-    updateDisplay();
+    drawIdleScreen();
+    
+    Serial.println(F("[READY] Monitoring bus activity...\n"));
 }
 
 void loop() {
     // Monitor core outputs
     monitorCores();
     
-    // Update display if needed (throttle to 100ms)
-    if(display_needs_update && (millis() - last_update > 100)) {
-        updateDisplay();
+    // Update display if needed (throttle to 200ms for GLCD)
+    if(display_needs_update && (millis() - last_update > 200)) {
+        if(system_running) {
+            drawDisplay();
+        } else {
+            drawIdleScreen();
+        }
         display_needs_update = false;
         last_update = millis();
     }
     
-    // Show stats every 10 seconds
+    // Periodic refresh even if no updates (every 500ms)
+    if(millis() - last_update > 500) {
+        if(system_running) {
+            drawDisplay();
+        }
+        last_update = millis();
+    }
+    
+    // Show stats every 15 seconds
     static unsigned long last_stats = 0;
-    if(millis() - last_stats > 10000) {
+    if(millis() - last_stats > 15000) {
         if(core1_count + core2_count > 0) {
-            showStats();
+            drawStats();
+            delay(3000);
+            display_needs_update = true;
         }
         last_stats = millis();
     }
@@ -255,16 +349,71 @@ void loop() {
     // Check for serial commands
     if(Serial.available()) {
         char cmd = Serial.read();
+        
         if(cmd == 'S' || cmd == 's') {
-            showStats();
-        } else if(cmd == 'R' || cmd == 'r') {
+            drawStats();
+            delay(3000);
+            display_needs_update = true;
+        } 
+        else if(cmd == 'R' || cmd == 'r') {
             // Reset counters
             core1_count = 0;
             core2_count = 0;
-            last_core1_value = 0;
-            last_core2_value = 0;
-            Serial.println(F("[RESET] Counters cleared"));
-            updateDisplay();
+            last_core1_addr = 0;
+            last_core1_data = 0;
+            last_core2_addr = 0;
+            last_core2_data = 0;
+            system_running = false;
+            Serial.println(F("\n[RESET] All counters cleared\n"));
+            drawIdleScreen();
+        }
+        else if(cmd == 'T' || cmd == 't') {
+            // Test 74HC165 reading
+            Serial.println(F("\n[TEST] Reading 74HC165 chain..."));
+            uint16_t test_data = read74HC165Chain();
+            Serial.print(F("Raw 16-bit: 0b"));
+            Serial.println(test_data, BIN);
+            Serial.print(F("Address (A0~A6): 0x"));
+            Serial.println(extractAddress(test_data), HEX);
+            Serial.print(F("Data (D0~D7): 0x"));
+            Serial.println(extractData(test_data), HEX);
+            Serial.println();
         }
     }
 }
+
+/*
+ * ============================================================================
+ * GLCD ST7920 Pinout (Software SPI)
+ * ============================================================================
+ * 
+ * Arduino Nano -> ST7920
+ * ----------------------------
+ * D13 (SCK)   -> CLK (E)
+ * D11 (MOSI)  -> Data (R/W)
+ * D10 (CS)    -> CS (RS)
+ * D8          -> Reset (RST)
+ * GND         -> GND, PSB (parallel/serial select = 0 for serial)
+ * VCC         -> VCC, BLA (backlight anode)
+ * 
+ * Note: PSB pin MUST be connected to GND for serial mode!
+ * 
+ * ============================================================================
+ * 74HC165 Wiring (Same as before)
+ * ============================================================================
+ * 
+ * 74HC165 #1 (Data Bus D0~D7):
+ *   Pin 1  (SH/LD)  -> Nano A0
+ *   Pin 2  (CLK)    -> Nano A1
+ *   Pin 9  (Q7)     -> 74HC165 #2 Pin 10 (DS)
+ *   Pin 11-14, 3-6  -> 28C256 D0~D7
+ * 
+ * 74HC165 #2 (Address Bus A0~A6):
+ *   Pin 1  (SH/LD)  -> Nano A0
+ *   Pin 2  (CLK)    -> Nano A1
+ *   Pin 9  (Q7)     -> Nano A2
+ *   Pin 10 (DS)     -> 74HC165 #1 Pin 9
+ *   Pin 11-14, 3-6  -> 28C256 A0~A6
+ * 
+ * ============================================================================
+ */
