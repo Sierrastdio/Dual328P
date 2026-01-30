@@ -170,9 +170,6 @@ void drawDisplay() {
         sprintf(buf, "Data: 0x%02X (%d)", last_core2_data, last_core2_data);
         u8g2.drawStr(8, 62, buf);
         
-        // Bottom status bar
-        u8g2.drawHLine(0, 11, 128);
-        
     } while(u8g2.nextPage());
 }
 
@@ -233,17 +230,6 @@ void monitorCores() {
         updated = true;
         system_running = true;
         
-        // Serial logging
-        Serial.print(F("[C1] Addr:0x"));
-        if(last_core1_addr < 0x10) Serial.print("0");
-        Serial.print(last_core1_addr, HEX);
-        Serial.print(F(" Data:0x"));
-        if(last_core1_data < 0x10) Serial.print("0");
-        Serial.print(last_core1_data, HEX);
-        Serial.print(F(" ("));
-        Serial.print(last_core1_data);
-        Serial.println(F(")"));
-        
         delay(10);  // Debounce
     }
     
@@ -258,17 +244,6 @@ void monitorCores() {
         updated = true;
         system_running = true;
         
-        // Serial logging
-        Serial.print(F("[C2] Addr:0x"));
-        if(last_core2_addr < 0x10) Serial.print("0");
-        Serial.print(last_core2_addr, HEX);
-        Serial.print(F(" Data:0x"));
-        if(last_core2_data < 0x10) Serial.print("0");
-        Serial.print(last_core2_data, HEX);
-        Serial.print(F(" ("));
-        Serial.print(last_core2_data);
-        Serial.println(F(")"));
-        
         delay(10);  // Debounce
     }
     
@@ -282,10 +257,6 @@ void monitorCores() {
 // ============================================================================
 
 void setup() {
-    Serial.begin(115200);
-    Serial.println(F("\n=== 74HC165 GLCD Monitor Started ==="));
-    Serial.println(F("Commands: S=Stats, R=Reset, T=Test\n"));
-    
     // Initialize GLCD
     u8g2.begin();
     u8g2.setContrast(128);  // Adjust as needed (0-255)
@@ -308,8 +279,6 @@ void setup() {
     
     // Initial display
     drawIdleScreen();
-    
-    Serial.println(F("[READY] Monitoring bus activity...\n"));
 }
 
 void loop() {
@@ -345,41 +314,6 @@ void loop() {
         }
         last_stats = millis();
     }
-    
-    // Check for serial commands
-    if(Serial.available()) {
-        char cmd = Serial.read();
-        
-        if(cmd == 'S' || cmd == 's') {
-            drawStats();
-            delay(3000);
-            display_needs_update = true;
-        } 
-        else if(cmd == 'R' || cmd == 'r') {
-            // Reset counters
-            core1_count = 0;
-            core2_count = 0;
-            last_core1_addr = 0;
-            last_core1_data = 0;
-            last_core2_addr = 0;
-            last_core2_data = 0;
-            system_running = false;
-            Serial.println(F("\n[RESET] All counters cleared\n"));
-            drawIdleScreen();
-        }
-        else if(cmd == 'T' || cmd == 't') {
-            // Test 74HC165 reading
-            Serial.println(F("\n[TEST] Reading 74HC165 chain..."));
-            uint16_t test_data = read74HC165Chain();
-            Serial.print(F("Raw 16-bit: 0b"));
-            Serial.println(test_data, BIN);
-            Serial.print(F("Address (A0~A6): 0x"));
-            Serial.println(extractAddress(test_data), HEX);
-            Serial.print(F("Data (D0~D7): 0x"));
-            Serial.println(extractData(test_data), HEX);
-            Serial.println();
-        }
-    }
 }
 
 /*
@@ -389,17 +323,10 @@ void loop() {
  * 
  * Arduino Nano -> ST7920
  * ----------------------------
- * D13 (SCK)   -> CLK (E)
- * D11 (MOSI)  -> Data (R/W)
- * D10 (CS)    -> CS (RS)
- * D8          -> Reset (RST)
- * GND         -> GND, PSB (parallel/serial select = 0 for serial)
- * VCC         -> VCC, BLA (backlight anode)
- * 
- * Note: PSB pin MUST be connected to GND for serial mode!
+ * repo: Arduino-Computer branch: TES-2XO Images/Circuit/glcdct.png
  * 
  * ============================================================================
- * 74HC165 Wiring (Same as before)
+ * 74HC165 Wiring
  * ============================================================================
  * 
  * 74HC165 #1 (Data Bus D0~D7):
@@ -407,6 +334,7 @@ void loop() {
  *   Pin 2  (CLK)    -> Nano A1
  *   Pin 9  (Q7)     -> 74HC165 #2 Pin 10 (DS)
  *   Pin 11-14, 3-6  -> 28C256 D0~D7
+ *   Pin 15 (CE)     -> GND (always enabled)
  * 
  * 74HC165 #2 (Address Bus A0~A6):
  *   Pin 1  (SH/LD)  -> Nano A0
@@ -414,6 +342,8 @@ void loop() {
  *   Pin 9  (Q7)     -> Nano A2
  *   Pin 10 (DS)     -> 74HC165 #1 Pin 9
  *   Pin 11-14, 3-6  -> 28C256 A0~A6
+ *   Pin 7  (A7)     -> GND (unused)
+ *   Pin 15 (CE)     -> GND (always enabled)
  * 
  * ============================================================================
  */
