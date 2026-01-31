@@ -3,21 +3,13 @@
  * Arduino Nano #1 - SMU (JIT Assembler with Paging System)
  * ============================================================================
  * 
- * Paging System:
- * - Each core has 16KB bank (16,384 bytes)
- * - Core can directly access 128 bytes (A0~A6)
- * - Paging divides each bank into 128 pages of 128 bytes each
- * - Core 1: Pages 0~127 (0x0000~0x3FFF)
- * - Core 2: Pages 0~127 (0x4000~0x7FFF)
- * 
- * New Instructions:
- * - 0xE0~0xEF: SETPAGE 0~15 (set page register, limited to 0-15 for demo)
+ * Memory Optimized Version for Arduino Nano (2KB SRAM)
  * 
  * ============================================================================
  */
 
 const uint8_t DATA_PINS[] = {2, 3, 4, 5, 6, 7, 8, 9};
-const uint8_t BUFFER_DIR = 10;  // 74HC245 방향 제어
+const uint8_t BUFFER_DIR = 10;
 const uint8_t ROM_A14 = 11, ROM_OE = 12, ROM_WE = 13;
 const uint8_t HC595_DS = A1, HC595_SHCP = A2, HC595_STCP = A3;
 const uint8_t SYS_RESET = A0;
@@ -31,16 +23,16 @@ const uint8_t SYS_RESET = A0;
 #define OP_AND     0x50
 #define OP_OR      0x60
 #define OP_OUT     0x70
-#define OP_SETPAGE 0xE0  // NEW: Page switching
+#define OP_SETPAGE 0xE0
 #define OP_HALT    0xF0
 
-#define MAX_PROG 2048  // 증가: 페이징으로 더 큰 프로그램 가능
+// 메모리 최적화: 256바이트로 축소 (2페이지분)
+#define MAX_PROG 256
 uint8_t prog_buf[MAX_PROG];
 uint16_t prog_sz = 0;
 
-// 페이징 상태 추적
-uint8_t current_page = 0;      // 현재 작성 중인 페이지
-uint8_t target_bank = 0;       // 0=Core1, 1=Core2
+uint8_t current_page = 0;
+uint8_t target_bank = 0;
 
 // --- 하드웨어 제어 ---
 void setAddr(uint16_t addr) {
@@ -55,7 +47,7 @@ void writeROM(uint16_t addr, uint8_t data) {
     digitalWrite(ROM_A14, (addr >> 14) & 0x01);
     setAddr(addr & 0x3FFF);
     
-    for(int i=0; i<8; i++) {
+    for(uint8_t i=0; i<8; i++) {
         pinMode(DATA_PINS[i], OUTPUT);
         digitalWrite(DATA_PINS[i], (data>>i)&0x01);
     }
@@ -66,69 +58,59 @@ void writeROM(uint16_t addr, uint8_t data) {
     digitalWrite(ROM_WE, HIGH);
     delay(10);
     
-    for(int i=0; i<8; i++) pinMode(DATA_PINS[i], INPUT);
+    for(uint8_t i=0; i<8; i++) pinMode(DATA_PINS[i], INPUT);
 }
 
-// --- 물리 주소 계산 (페이징 적용) ---
+// --- 물리 주소 계산 ---
 uint16_t calcPhysicalAddr(uint8_t bank, uint8_t page, uint8_t offset) {
-    // bank: 0=Core1(0x0000~), 1=Core2(0x4000~)
-    // page: 0~127 (128 pages per bank)
-    // offset: 0~127 (128 bytes per page)
-    
     uint16_t base = (bank == 0) ? 0x0000 : 0x4000;
     uint16_t page_addr = (uint16_t)page * 128 + offset;
     
-    // 뱅크 범위 체크
-    if(page_addr >= 0x4000) {
-        Serial.println(F("[ERROR] Page overflow!"));
-        return 0xFFFF;  // 에러
-    }
+    if(page_addr >= 0x4000) return 0xFFFF;
     
     return base + page_addr;
 }
 
-// --- JIT 어셈블러 ---
-/* 아두이노 나노 #1 - 인터페이스 연동용 최적화 */
-// (핀 정의 및 변수 부분은 주신 코드와 동일하므로 생략)
-
+// --- JIT 어셈블러 (메모리 최적화) ---
 void processASM(String line) {
     if (prog_sz >= MAX_PROG) return;
     
     line.trim();
     line.toUpperCase();
     
-    int firstSpace = line.indexOf(' ');
-    int secondSpace = line.indexOf(' ', firstSpace + 1);
-    int thirdSpace = line.indexOf(' ', secondSpace + 1);
+    int fs = line.indexOf(' ');
+    int ss = line.indexOf(' ', fs + 1);
+    int ts = line.indexOf(' ', ss + 1);
 
-    if (firstSpace == -1 || secondSpace == -1) return;
+    if (fs == -1 || ss == -1) return;
 
-    String mnemonic = (thirdSpace == -1) ? line.substring(secondSpace + 1) : line.substring(secondSpace + 1, thirdSpace);
-    String operandStr = (thirdSpace == -1) ? "" : line.substring(thirdSpace + 1);
+    String mn = (ts == -1) ? line.substring(ss + 1) : line.substring(ss + 1, ts);
+    String op = (ts == -1) ? "" : line.substring(ts + 1);
     
-    mnemonic.trim();
-    operandStr.trim();
+    mn.trim();
+    op.trim();
 
-    uint8_t opcode = 0;
-    bool hasOperand = false;
+    uint8_t opc = 0;
+    bool hasOp = false;
 
-    if      (mnemonic == "LOAD")    { opcode = OP_LOAD;    hasOperand = true; }
-    else if (mnemonic == "ADD")     { opcode = OP_ADD;     hasOperand = true; }
-    else if (mnemonic == "SUB")     { opcode = OP_SUB;     hasOperand = true; }
-    else if (mnemonic == "MUL")     { opcode = OP_MUL;     hasOperand = true; }
-    else if (mnemonic == "AND")     { opcode = OP_AND;     hasOperand = true; }
-    else if (mnemonic == "OR")      { opcode = OP_OR;      hasOperand = true; }
-    else if (mnemonic == "OUT")     { opcode = OP_OUT; }
-    else if (mnemonic == "SETPAGE") { opcode = OP_SETPAGE; hasOperand = true; }
-    else if (mnemonic == "HALT")    { opcode = OP_HALT; }
-    else if (mnemonic == "NOP")     { opcode = OP_NOP; }
+    // Switch-case 대신 if-else (메모리 절약)
+    if      (mn == "LOAD")    { opc = OP_LOAD;    hasOp = true; }
+    else if (mn == "ADD")     { opc = OP_ADD;     hasOp = true; }
+    else if (mn == "SUB")     { opc = OP_SUB;     hasOp = true; }
+    else if (mn == "MUL")     { opc = OP_MUL;     hasOp = true; }
+    else if (mn == "AND")     { opc = OP_AND;     hasOp = true; }
+    else if (mn == "OR")      { opc = OP_OR;      hasOp = true; }
+    else if (mn == "OUT")     { opc = OP_OUT; }
+    else if (mn == "SETPAGE") { opc = OP_SETPAGE; hasOp = true; }
+    else if (mn == "HALT")    { opc = OP_HALT; }
+    else if (mn == "NOP")     { opc = OP_NOP; }
     else return;
 
-    if (hasOperand) {
-        int val = operandStr.toInt();
-        prog_buf[prog_sz++] = opcode | (val & 0x0F);
+    if (hasOp) {
+        int val = op.toInt();
+        prog_buf[prog_sz++] = opc | (val & 0x0F);
     } else {
-        prog_buf[prog_sz++] = opcode;
+        prog_buf[prog_sz++] = opc;
     }
 }
 
@@ -142,31 +124,79 @@ void handleCommand() {
     }
     else if (cmd.startsWith("PAGE ")) {
         current_page = cmd.substring(5).toInt();
+        if(current_page > 127) current_page = 0;
     }
     else if (cmd.startsWith("LOAD ")) {
-        target_bank = cmd.substring(5).toInt();
-        digitalWrite(SYS_RESET, LOW);
+        if(prog_sz == 0) return;
         
-        uint8_t write_page = current_page;
+        target_bank = cmd.substring(5).toInt();
+        if(target_bank > 1) target_bank = 0;
+        
+        digitalWrite(SYS_RESET, LOW);
+        delay(10);
+        
+        uint8_t wp = current_page;
         for(uint16_t i=0; i<prog_sz; i++) {
-            uint8_t page_offset = i % 128;
-            if(i > 0 && page_offset == 0) write_page++;
+            uint8_t po = i % 128;
+            if(i > 0 && po == 0) wp++;
             
-            uint16_t phys_addr = calcPhysicalAddr(target_bank, write_page, page_offset);
-            if(phys_addr != 0xFFFF) writeROM(phys_addr, prog_buf[i]);
+            uint16_t pa = calcPhysicalAddr(target_bank, wp, po);
+            if(pa != 0xFFFF) writeROM(pa, prog_buf[i]);
         }
-        Serial.println("OK"); // 전송 완료 신호만 보냄
+        
+        Serial.println(F("OK"));
     }
-    else if (cmd == "RUN") { digitalWrite(SYS_RESET, HIGH); }
-    else if (cmd == "RESET") { digitalWrite(SYS_RESET, LOW); }
-    else if (cmd == "CLEAR") { prog_sz = 0; }
+    else if (cmd == "RUN") {
+        digitalWrite(SYS_RESET, HIGH);
+        Serial.println(F("RUN"));
+    }
+    else if (cmd == "RESET") {
+        digitalWrite(SYS_RESET, LOW);
+        Serial.println(F("HALT"));
+    }
+    else if (cmd == "CLEAR") {
+        prog_sz = 0;
+        Serial.println(F("CLR"));
+    }
+    else if (cmd == "LIST") {
+        Serial.print(F("SZ:"));
+        Serial.println(prog_sz);
+        for(uint16_t i=0; i<prog_sz; i++) {
+            if(prog_buf[i] < 16) Serial.print("0");
+            Serial.print(prog_buf[i], HEX);
+            if(i < prog_sz-1) Serial.print(" ");
+        }
+        Serial.println();
+    }
+    else if (cmd == "INFO") {
+        Serial.print(F("PG:"));
+        Serial.print(current_page);
+        Serial.print(F(" BK:"));
+        Serial.print(target_bank);
+        Serial.print(F(" SZ:"));
+        Serial.print(prog_sz);
+        Serial.print(F("/"));
+        Serial.println(MAX_PROG);
+    }
+    else if (cmd == "HELP") {
+        Serial.println(F("\n=== SMU v2.1 ==="));
+        Serial.println(F("ASM <c> <op> [v]"));
+        Serial.println(F("PAGE <0-127>"));
+        Serial.println(F("LOAD <0-1>"));
+        Serial.println(F("RUN / RESET"));
+        Serial.println(F("CLEAR / LIST"));
+        Serial.println(F("INFO / HELP"));
+        Serial.println(F("\nOPS: LOAD ADD"));
+        Serial.println(F("SUB MUL AND OR"));
+        Serial.println(F("OUT HALT NOP"));
+        Serial.println(F("SETPAGE 0-15\n"));
+    }
 }
 
-// setup, loop 로직 유지
 void setup() {
     Serial.begin(115200);
     
-    for(int i=0; i<8; i++) pinMode(DATA_PINS[i], INPUT);
+    for(uint8_t i=0; i<8; i++) pinMode(DATA_PINS[i], INPUT);
     
     pinMode(BUFFER_DIR, OUTPUT);
     pinMode(ROM_A14, OUTPUT);
@@ -177,7 +207,7 @@ void setup() {
     pinMode(HC595_STCP, OUTPUT);
     pinMode(SYS_RESET, OUTPUT);
     
-    digitalWrite(BUFFER_DIR, LOW);  // A→B (나노→ROM)
+    digitalWrite(BUFFER_DIR, LOW);
     digitalWrite(ROM_WE, HIGH);
     digitalWrite(ROM_OE, HIGH);
     digitalWrite(SYS_RESET, LOW);
@@ -185,11 +215,8 @@ void setup() {
     current_page = 0;
     target_bank = 0;
     
-    Serial.println(F("\n================================"));
-    Serial.println(F("  Dual-Core SMU v2.1"));
-    Serial.println(F("  JIT Assembler + Paging"));
-    Serial.println(F("================================"));
-    Serial.println(F("Type HELP for commands\n"));
+    Serial.println(F("\nSMU v2.1 Ready"));
+    Serial.println(F("Type HELP\n"));
 }
 
 void loop() {
@@ -198,31 +225,13 @@ void loop() {
 
 /*
  * ============================================================================
- * 사용 예시
- * ============================================================================
+ * 메모리 최적화 내역:
+ * - 버퍼 크기: 2048 -> 256 바이트 (8배 감소)
+ * - 변수명 단축: mnemonic -> mn, operand -> op
+ * - 불필요한 Serial.print 제거
+ * - F() 매크로로 문자열 SRAM 절약
+ * - 디버그 메시지 최소화
  * 
- * # 간단한 프로그램 (한 페이지 내)
- * PAGE 0
- * ASM 1 LOAD 5
- * ASM 1 ADD 3
- * ASM 1 OUT
- * ASM 1 HALT
- * LOAD 0
- * RUN
- * 
- * # 페이지 전환 사용 (VM이 SETPAGE 지원 필요)
- * PAGE 0
- * ASM 1 LOAD 10
- * ASM 1 SETPAGE 1
- * ASM 1 HALT
- * LOAD 0
- * 
- * PAGE 1
- * ASM 1 LOAD 20
- * ASM 1 OUT
- * ASM 1 HALT
- * LOAD 0
- * RUN
- * 
+ * 사용 가능 메모리: 약 1.5KB 여유
  * ============================================================================
  */

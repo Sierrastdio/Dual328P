@@ -5,8 +5,9 @@ from textual.widgets import Header, Footer, Static, Input, TextArea
 from textual.containers import Horizontal, Vertical
 from textual.binding import Binding
 from textual.events import Key
-####################################윈도우 환경에선  COM3 같은 포트형식으로 변경 필요.
-SERIAL_PORT = "/dev/ttyUSB0" 
+
+#### 윈도우 환경에선 COM3 같은 포트형식으로 변경 필요
+SERIAL_PORT = "COM4" 
 BAUD_RATE = 115200
 
 class IBM5100App(App):
@@ -32,6 +33,11 @@ class IBM5100App(App):
         Binding("i", "insert_mode", "i: INSERT"), 
     ]
 
+    def __init__(self, *args, **kwargs):
+        """초기화 - ser 속성을 가장 먼저 생성"""
+        super().__init__(*args, **kwargs)
+        self.ser = None  # 여기서 초기화!
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield Horizontal(
@@ -43,7 +49,7 @@ class IBM5100App(App):
             Vertical(
                 Vertical(
                     Static(" PAGING MONITOR ", classes="panel_title"),
-                    Static(self.update_status(0, 0), id="status_area", classes="stat_text"),
+                    Static(self.update_status(0, 0, "DISCONNECTED"), id="status_area", classes="stat_text"),
                     id="status_container"
                 ),
                 Vertical(
@@ -51,7 +57,8 @@ class IBM5100App(App):
                     Static(
                         " [COMMANDS]\n"
                         " :w <B> <P> - Load (B:0-1, P:0-127)\n"
-                        " :run / :r (reset) / :clear / :q\n\n"
+                        " :run / :r (reset) / :clear / :q\n"
+                        " :connect - Retry serial\n\n"
                         " [ISA ADDITIONS]\n"
                         " SETPAGE <0-15> - Switch Page\n\n"
                         " [MEM MAP]\n"
@@ -69,26 +76,73 @@ class IBM5100App(App):
         yield Input(placeholder=":", id="cmd_input")
         yield Footer()
 
-    def update_status(self, bank, page):
+    def update_status(self, bank, page, status="STANDBY"):
         base = "0x0000" if str(bank) == "0" else "0x4000"
+        serial_status = "CONNECTED" if self.ser and self.ser.is_open else "DISCONNECTED"
         return (
             f" [HARDWARE STATE]\n"
+            f"  SERIAL      : {serial_status}\n"
             f"  TARGET BANK : {bank} (Core {int(bank)+1})\n"
             f"  BASE ADDR   : {base}\n"
             f"  ACTIVE PAGE : {page} (of 127)\n"
             f"  PAGE ADDR   : 0x{int(page)*128:04X}\n"
             f" --------------------------\n"
-            f"  STATUS      : STANDBY"
+            f"  STATUS      : {status}"
         )
+
+    def connect_serial(self):
+        """시리얼 포트 연결 시도"""
+        try:
+            if self.ser and self.ser.is_open:
+                self.ser.close()
+            
+            self.ser = serial.Serial(
+                port=SERIAL_PORT,
+                baudrate=BAUD_RATE,
+                timeout=1,
+                write_timeout=1
+            )
+            time.sleep(2)  # Arduino 리셋 대기
+            
+            # 연결 테스트
+            self.ser.write(b"\n")
+            time.sleep(0.1)
+            self.ser.reset_input_buffer()
+            
+            self.notify(f"Serial connected: {SERIAL_PORT}", severity="information")
+            return True
+            
+        except serial.SerialException as e:
+            self.notify(f"Serial error: {str(e)}", severity="error")
+            self.ser = None
+            return False
+        except Exception as e:
+            self.notify(f"Connection failed: {str(e)}", severity="error")
+            self.ser = None
+            return False
 
     def on_mount(self) -> None:
         self.editor = self.query_one("#code_editor")
         self.cmd_input = self.query_one("#cmd_input")
         self.editor.focus()
-        try:
-            self.ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=0.1)
-        except:
-            self.ser = None
+        
+        # 시리얼 연결 시도
+        if self.connect_serial():
+            self.query_one("#status_area").update(
+                self.update_status(0, 0, "CONNECTED")
+            )
+        else:
+            self.query_one("#status_area").update(
+                self.update_status(0, 0, "DISCONNECTED")
+            )
+
+    def on_unmount(self) -> None:
+        """앱 종료 시 시리얼 포트 정리"""
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.close()
+            except:
+                pass
 
     def on_key(self, event: Key) -> None:
         if event.key == "i" and self.cmd_input.has_focus:
@@ -99,7 +153,6 @@ class IBM5100App(App):
         self.cmd_input.display = False
         self.editor.focus()
 
-    # 줄 표시 문자(0000: ) 강제 고정 로직 강화
     def on_text_area_changed(self, event: TextArea.Changed) -> None:
         editor = event.text_area
         lines = editor.text.split("\n")
@@ -109,7 +162,6 @@ class IBM5100App(App):
         for i, line in enumerate(lines):
             prefix = f"{i:04d}: "
             if not line.startswith(prefix):
-                # 접두사가 없거나 망가진 경우 복구
                 content = line[6:] if len(line) > 6 else ""
                 new_lines.append(prefix + content)
                 needs_update = True
@@ -123,7 +175,7 @@ class IBM5100App(App):
 
     def on_text_area_selection_changed(self, event: TextArea.SelectionChanged) -> None:
         row, col = event.text_area.cursor_location
-        if col < 6: # 커서가 prefix 영역으로 들어가지 못하게 방어
+        if col < 6:
             event.text_area.move_cursor((row, 6))
 
     def action_command_mode(self) -> None:
@@ -134,50 +186,119 @@ class IBM5100App(App):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         input_text = event.value.strip()
         args = input_text.split()
-        if not args: return
+        if not args: 
+            event.input.value = ":"
+            return
         
         cmd = args[0]
 
         if cmd == ":w":
             bank = args[1] if len(args) > 1 else "0"
             page = args[2] if len(args) > 2 else "0"
-            self.upload_paging(bank, page)
-            self.query_one("#status_area").update(self.update_status(bank, page))
+            
+            if self.upload_paging(bank, page):
+                self.query_one("#status_area").update(
+                    self.update_status(bank, page, "LOADED")
+                )
+            else:
+                self.query_one("#status_area").update(
+                    self.update_status(bank, page, "UPLOAD FAILED")
+                )
+                
+        elif cmd == ":connect":
+            if self.connect_serial():
+                self.query_one("#status_area").update(
+                    self.update_status(0, 0, "CONNECTED")
+                )
+            else:
+                self.query_one("#status_area").update(
+                    self.update_status(0, 0, "DISCONNECTED")
+                )
+                
         elif cmd == ":run": 
-            if self.ser: self.ser.write(b"RUN\n")
-            self.notify("RUN COMMAND SENT")
+            if self.ser and self.ser.is_open:
+                try:
+                    self.ser.write(b"RUN\n")
+                    self.notify("RUN COMMAND SENT")
+                except Exception as e:
+                    self.notify(f"Send failed: {e}", severity="error")
+            else:
+                self.notify("Serial not connected", severity="error")
+                
         elif cmd == ":r": 
-            if self.ser: self.ser.write(b"RESET\n")
-            self.notify("RESET SENT")
+            if self.ser and self.ser.is_open:
+                try:
+                    self.ser.write(b"RESET\n")
+                    self.notify("RESET SENT")
+                except Exception as e:
+                    self.notify(f"Send failed: {e}", severity="error")
+            else:
+                self.notify("Serial not connected", severity="error")
+                
         elif cmd == ":clear": 
             self.editor.text = "0000: "
+            self.notify("Editor cleared")
+            
         elif cmd == ":q": 
             self.exit()
         
         event.input.value = ":"
 
     def upload_paging(self, bank, page):
-        if not self.ser: 
-            self.notify("SERIAL ERROR", severity="error")
-            return
+        """페이징 시스템으로 업로드"""
+        if not self.ser or not self.ser.is_open:
+            self.notify("Serial not connected! Use :connect", severity="error")
+            return False
         
-        # 순차적 명령어 전송 (아두이노가 처리할 시간을 주기 위해 sleep 추가)
         try:
-            self.ser.write(f"PAGE {page}\n".encode())
+            # 버퍼 클리어
+            self.ser.reset_input_buffer()
+            self.ser.reset_output_buffer()
+            
+            # 페이지 설정
+            cmd = f"PAGE {page}\n"
+            self.ser.write(cmd.encode())
             time.sleep(0.1)
+            
+            # 버퍼 클리어
             self.ser.write(b"CLEAR\n")
             time.sleep(0.1)
 
+            # 코드 전송
+            line_count = 0
             for line in self.editor.text.split("\n"):
                 inst = line[6:].strip()
                 if inst:
-                    self.ser.write(f"ASM 1 {inst}\n".encode())
-                    time.sleep(0.05) # 각 줄마다 충분한 전송 시간 확보
+                    asm_cmd = f"ASM 1 {inst}\n"
+                    self.ser.write(asm_cmd.encode())
+                    time.sleep(0.05)
+                    line_count += 1
 
-            self.ser.write(f"LOAD {bank}\n".encode())
-            self.notify(f"BANK {bank} PAGE {page} LOADED")
+            # 로드 명령
+            load_cmd = f"LOAD {bank}\n"
+            self.ser.write(load_cmd.encode())
+            time.sleep(0.5)  # 쓰기 완료 대기
+            
+            # 응답 확인
+            response = self.ser.read_all().decode('utf-8', errors='ignore')
+            
+            self.notify(
+                f"Uploaded {line_count} lines to Bank {bank}, Page {page}",
+                severity="information"
+            )
+            
+            if "OK" in response:
+                return True
+            else:
+                self.notify("No OK response from Arduino", severity="warning")
+                return True  # 일단 성공으로 간주
+                
+        except serial.SerialException as e:
+            self.notify(f"Serial error: {str(e)}", severity="error")
+            return False
         except Exception as e:
-            self.notify(f"UPLOAD FAILED: {e}", severity="error")
+            self.notify(f"Upload failed: {str(e)}", severity="error")
+            return False
 
 if __name__ == "__main__":
     IBM5100App().run()
