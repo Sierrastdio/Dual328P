@@ -1,9 +1,13 @@
 /*
  * ============================================================================
- * Arduino Nano #1 - SMU (Storage Management Unit)
+ * Arduino Nano #1 - SMU v2.2 (Final)
  * ============================================================================
  * 
- * Role: ONE-WAY INPUT ONLY - Write bytecode to ROM
+ * Instruction Set:
+ * - Arithmetic: LOAD, ADD, SUB, MUL, AND, OR
+ * - Slot (16 vars): FETCH, SLOT
+ * - Stack (8 deep): PUSH, POP
+ * - Control: OUT, SETPAGE, HALT, NOP
  * 
  * ============================================================================
  */
@@ -23,12 +27,10 @@ const uint8_t SYS_RESET = A0;
 #define OP_AND     0x50
 #define OP_OR      0x60
 #define OP_OUT     0x70
-
-#define OP_FETCH   0x80  // 추가된 슬롯 로드 (Slot n -> A)
-#define OP_SLOT    0x90  // 추가된 슬롯 저장 (A -> Slot n)
-#define OP_PUSH    0xA0  // 추가된 스택 푸시
-#define OP_POP     0xB0  // 추가된 스택 팝
-
+#define OP_FETCH   0x80
+#define OP_SLOT    0x90
+#define OP_PUSH    0xA0
+#define OP_POP     0xB0
 #define OP_SETPAGE 0xE0
 #define OP_HALT    0xF0
 
@@ -66,23 +68,19 @@ void writeROM(uint16_t addr, uint8_t data) {
     for(uint8_t i=0; i<8; i++) pinMode(DATA_PINS[i], INPUT);
 }
 
-// --- 물리 주소 계산 ---
 uint16_t calcPhysicalAddr(uint8_t bank, uint8_t page, uint8_t offset) {
     uint16_t base = (bank == 0) ? 0x0000 : 0x4000;
     uint16_t page_addr = (uint16_t)page * 128 + offset;
-    
     if(page_addr >= 0x4000) return 0xFFFF;
-    
     return base + page_addr;
 }
 
-// --- 어셈블리 파싱 (단순화) ---
+// --- 어셈블리 파싱 ---
 void processLine(String line) {
     if (prog_sz >= MAX_PROG) return;
     
     line.trim();
     line.toUpperCase();
-    
     if(line.length() == 0) return;
     
     int space = line.indexOf(' ');
@@ -102,6 +100,10 @@ void processLine(String line) {
     else if (inst == "AND")     { opcode = OP_AND;     hasOperand = true; }
     else if (inst == "OR")      { opcode = OP_OR;      hasOperand = true; }
     else if (inst == "OUT")     { opcode = OP_OUT; }
+    else if (inst == "FETCH")   { opcode = OP_FETCH;   hasOperand = true; }
+    else if (inst == "SLOT")    { opcode = OP_SLOT;    hasOperand = true; }
+    else if (inst == "PUSH")    { opcode = OP_PUSH; }
+    else if (inst == "POP")     { opcode = OP_POP; }
     else if (inst == "SETPAGE") { opcode = OP_SETPAGE; hasOperand = true; }
     else if (inst == "HALT")    { opcode = OP_HALT; }
     else if (inst == "NOP")     { opcode = OP_NOP; }
@@ -120,14 +122,12 @@ void handleCommand() {
     cmd.trim();
     if (cmd.length() == 0) return;
 
-    // :w 명령어 - LOAD
     if (cmd.startsWith(":w ")) {
         if(prog_sz == 0) {
             Serial.println(F("EMPTY"));
             return;
         }
         
-        // :w <bank> <page> 파싱
         int fs = cmd.indexOf(' ');
         int ss = cmd.indexOf(' ', fs + 1);
         
@@ -137,11 +137,9 @@ void handleCommand() {
         if(target_bank > 1) target_bank = 0;
         if(current_page > 127) current_page = 0;
         
-        // 코어 정지
         digitalWrite(SYS_RESET, LOW);
         delay(10);
         
-        // ROM 쓰기
         uint8_t wp = current_page;
         for(uint16_t i=0; i<prog_sz; i++) {
             uint8_t po = i % 128;
@@ -153,22 +151,18 @@ void handleCommand() {
         
         Serial.println(F("OK"));
     }
-    // :run - 코어 시작
     else if (cmd == ":run") {
         digitalWrite(SYS_RESET, HIGH);
         Serial.println(F("OK"));
     }
-    // :r - 코어 정지
     else if (cmd == ":r") {
         digitalWrite(SYS_RESET, LOW);
         Serial.println(F("OK"));
     }
-    // :clear - 버퍼 클리어
     else if (cmd == ":clear") {
         prog_sz = 0;
         Serial.println(F("OK"));
     }
-    // 나머지는 모두 어셈블리 라인으로 처리
     else {
         processLine(cmd);
     }

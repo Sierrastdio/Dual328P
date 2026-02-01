@@ -1,34 +1,12 @@
 /*
- * 코어2의 펌웨어도 코어1의 것과 동일한것으로 일단 간주.
  * ============================================================================
- * Core 1 - Virtual Machine Firmware
+ * Core 1 - Virtual Machine Firmware v2.2 (Final)
  * ============================================================================
  * 
- * This firmware interprets bytecode instructions stored in ROM.
- * Users write programs by loading bytecode into ROM via Arduino Nano.
- * 
- * Instruction Set (8-bit):
- * -------------------------
- * Format: OOOO DDDD (4-bit opcode, 4-bit data)
- * 
- * 0x0D  NOP        - No operation
- * 0x1D  LOAD D     - A = D (load immediate)
- * 0x2D  ADD D      - A = A + D
- * 0x3D  SUB D      - A = A - D
- * 0x4D  MUL D      - A = A * D
- * 0x5D  AND D      - A = A & D
- * 0x6D  OR D       - A = A | D
- * 0x70  OUT        - Output A to RegA (0x20)
- * 0x80  LOADM      - A = ROM[next byte address]
- * 0x90  STORM      - ROM[next byte] = A (if writable)
- * 0xF0  HALT       - Stop execution
- * 
- * Example Program:
- * ----------------
- * 0x0000: 0x15   LOAD 5      ; A = 5
- * 0x0001: 0x23   ADD 3       ; A = 5 + 3 = 8
- * 0x0002: 0x70   OUT         ; Output 8
- * 0x0003: 0xF0   HALT        ; Stop
+ * Features:
+ * - 16 Slots (SRAM variables)
+ * - 8-deep Stack
+ * - Physical Page switching (A7~A13 via address bus)
  * 
  * ============================================================================
  */
@@ -36,51 +14,65 @@
 #include <avr/io.h>
 #include <util/delay.h>
 
-// ============================================================================
-// Instruction Set Opcodes
-// ============================================================================
-#define OP_NOP   0x00
-#define OP_LOAD  0x10
-#define OP_ADD   0x20
-#define OP_SUB   0x30
-#define OP_MUL   0x40
-#define OP_AND   0x50
-#define OP_OR    0x60
-#define OP_OUT   0x70
-#define OP_LOADM 0x80
-#define OP_STORM 0x90
-#define OP_HALT  0xF0
+// Instruction Set
+#define OP_NOP     0x00
+#define OP_LOAD    0x10
+#define OP_ADD     0x20
+#define OP_SUB     0x30
+#define OP_MUL     0x40
+#define OP_AND     0x50
+#define OP_OR      0x60
+#define OP_OUT     0x70
+#define OP_FETCH   0x80
+#define OP_SLOT    0x90
+#define OP_PUSH    0xA0
+#define OP_POP     0xB0
+#define OP_SETPAGE 0xE0
+#define OP_HALT    0xF0
 
-// ============================================================================
 // VM State
-// ============================================================================
-volatile uint8_t regA = 0x00;      // Accumulator
-volatile uint8_t regB = 0x00;      // Temporary (internal)
-volatile uint16_t PC = 0x00;       // Program Counter
-volatile bool halted = false;       // Execution state
+volatile uint8_t regA = 0x00;
+volatile uint8_t slots[16];        // 16 variable slots
+volatile uint8_t stack[8];         // 8-deep stack
+volatile uint8_t SP = 0;           // Stack pointer
+volatile uint8_t page = 0;         // Current page (0-15)
+volatile uint8_t PC_offset = 0;    // Offset within page (0-127)
+volatile bool halted = false;
 
-// I/O Address
 const uint8_t REG_A_ADDR = 0x20;
 
-// ============================================================================
-// Hardware Control Macros
-// ============================================================================
+// Hardware Control
 #define TAKE_BUS()      PORTC |= (1 << 4)
 #define GIVE_BUS()      PORTC &= ~(1 << 4)
 #define SET_READ()      PORTC &= ~(1 << 5)
 #define SET_WRITE()     PORTC |= (1 << 5)
 #define SYNC_DELAY()    asm volatile("nop\n\t nop\n\t nop\n\t")
 
-// ============================================================================
-// Hardware Abstraction Layer
-// ============================================================================
+// Hardware Abstraction
+inline void set_addr(uint8_t offset_7bit) {
+    // 하위 7비트 주소만 설정 (A0~A6)
+    DDRB |= 0x3C;  // PB2~PB5 출력
+    DDRC |= 0x07;  // PC0~PC2 출력
+    
+    offset_7bit &= 0x7F;
+    PORTB = (PORTB & 0xC3) | ((offset_7bit & 0x0F) << 2);
+    PORTC = (PORTC & 0xF8) | ((offset_7bit >> 4) & 0x07);
+}
 
-inline void set_addr(uint8_t a) {
-    DDRB |= 0x3C;
-    DDRC |= 0x07;
-    a &= 0x7F;
-    PORTB = (PORTB & 0xC3) | ((a & 0x0F) << 2);
-    PORTC = (PORTC & 0xF8) | ((a >> 4) & 0x07);
+inline void set_page_addr(uint8_t page_num) {
+    // 페이지 번호를 상위 주소로 변환
+    // 실제로는 74HC595를 통해 A7~A13을 제어해야 하지만
+    // 현재 설계에서는 코어가 직접 제어할 수 없음
+    // 
+    // **해결책**: PC3을 통해 138 디코더의 C 입력을 제어
+    // 이를 통해 제한적이나마 페이지 전환 가능
+    
+    // PC3 토글로 간단한 페이지 구분
+    if(page_num & 0x01) {
+        PORTC |= (1 << 3);   // PC3 = HIGH
+    } else {
+        PORTC &= ~(1 << 3);  // PC3 = LOW
+    }
 }
 
 inline void set_data_out() { 
@@ -108,19 +100,18 @@ inline uint8_t read_bus() {
     return ((PIND & 0xFC) >> 2) | ((PINB & 0x03) << 6);
 }
 
-// ============================================================================
-// VM Instructions
-// ============================================================================
-
-/**
- * Read instruction byte from ROM at current PC
- */
+// Fetch instruction from ROM
 uint8_t fetch() {
     TAKE_BUS();
     set_data_in();
     SET_READ();
     
-    set_addr(PC & 0x7F);
+    // 페이지 설정 (상위 주소)
+    set_page_addr(page);
+    
+    // 오프셋 설정 (하위 7비트)
+    set_addr(PC_offset);
+    
     SYNC_DELAY();
     _delay_us(5);
     
@@ -130,9 +121,7 @@ uint8_t fetch() {
     return instruction;
 }
 
-/**
- * Output register to monitor
- */
+// Output to monitor
 void output_register(uint8_t reg_addr, uint8_t value) {
     TAKE_BUS();
     set_data_out();
@@ -147,16 +136,13 @@ void output_register(uint8_t reg_addr, uint8_t value) {
     set_high_z();
 }
 
-/**
- * Execute single instruction
- */
+// Execute instruction
 void execute(uint8_t instruction) {
     uint8_t opcode = instruction & 0xF0;
     uint8_t operand = instruction & 0x0F;
     
     switch(opcode) {
         case OP_NOP:
-            // Do nothing
             break;
             
         case OP_LOAD:
@@ -187,13 +173,34 @@ void execute(uint8_t instruction) {
             output_register(REG_A_ADDR, regA);
             break;
             
-        case OP_LOADM:
-            // Load from memory (next byte is address)
-            PC++;
-            regB = fetch();
-            PC++;
-            regA = fetch();  // Value at address
-            PC--;  // Adjust for auto-increment
+        case OP_FETCH:
+            // Load from slot to regA
+            regA = slots[operand & 0x0F];
+            break;
+            
+        case OP_SLOT:
+            // Store regA to slot
+            slots[operand & 0x0F] = regA;
+            break;
+            
+        case OP_PUSH:
+            // Push regA to stack
+            if(SP < 8) {
+                stack[SP++] = regA;
+            }
+            break;
+            
+        case OP_POP:
+            // Pop from stack to regA
+            if(SP > 0) {
+                regA = stack[--SP];
+            }
+            break;
+            
+        case OP_SETPAGE:
+            // Physical page switch
+            page = operand & 0x0F;
+            PC_offset = 0;  // Reset offset when changing page
             break;
             
         case OP_HALT:
@@ -201,97 +208,120 @@ void execute(uint8_t instruction) {
             break;
             
         default:
-            // Invalid opcode, treat as NOP
             break;
     }
 }
 
-// ============================================================================
-// Main Program
-// ============================================================================
-
 void setup() {
     // Configure control pins
-    DDRC |= 0x30;
+    DDRC |= 0x38;  // PC3, PC4, PC5 출력 (페이지 제어 포함)
     
     TAKE_BUS();
     SET_READ();
     
     // Initialize VM state
     regA = 0x00;
-    regB = 0x00;
-    PC = 0x00;
+    PC_offset = 0;
+    SP = 0;
+    page = 0;
     halted = false;
     
-    // Small delay for system stabilization
+    // Clear slots and stack
+    for(uint8_t i=0; i<16; i++) slots[i] = 0;
+    for(uint8_t i=0; i<8; i++) stack[i] = 0;
+    
     _delay_ms(100);
 }
 
 void loop() {
     if(halted) {
-        // Program halted, release bus
         set_high_z();
         GIVE_BUS();
         _delay_ms(100);
         return;
     }
     
-    // Fetch-Decode-Execute cycle
+    // Fetch-Decode-Execute
     uint8_t instruction = fetch();
     execute(instruction);
     
-    PC++;
+    // Increment PC within page
+    PC_offset++;
     
-    // Prevent PC overflow (wrap at 128 bytes)
-    if(PC >= 128) {
-        PC = 0;
+    // Wrap at 128 bytes per page
+    if(PC_offset >= 128) {
+        PC_offset = 0;
+        // Stay on current page or halt
+        // (automatic page increment could be added here)
     }
     
-    // Give Core 2 a chance to run
+    // Give Core 2 a chance
     set_high_z();
     GIVE_BUS();
     _delay_us(100);
     TAKE_BUS();
     
-    _delay_us(10);  // Instruction cycle time
+    _delay_us(10);
 }
 
 /*
  * ============================================================================
- * Programming Examples
+ * Physical Page Switching
  * ============================================================================
  * 
- * Example 1: Simple Addition
- * --------------------------
- * W 0x0000 0x15   ; LOAD 5
- * W 0x0001 0x23   ; ADD 3
- * W 0x0002 0x70   ; OUT
- * W 0x0003 0xF0   ; HALT
- * G               ; Execute
+ * 현재 구현:
+ * - PC3을 통한 제한적 페이지 전환 (2페이지)
+ * - page 변수에 0-15 저장
  * 
- * Output: [CORE1] A: 0x08 (8)
+ * 완전한 구현을 위해서는:
+ * - 추가 I/O 핀으로 74HC595 제어 필요
+ * - 또는 나노가 미리 여러 페이지를 연속으로 로드
  * 
+ * 현재는 SETPAGE로 page 레지스터 변경 + PC3 토글만 수행
  * 
- * Example 2: Multiplication
- * -------------------------
- * W 0x0000 0x17   ; LOAD 7
- * W 0x0001 0x42   ; MUL 2
- * W 0x0002 0x70   ; OUT
- * W 0x0003 0xF0   ; HALT
- * G
+ * ============================================================================
  * 
- * Output: [CORE1] A: 0x0E (14)
+ * Example Programs
+ * ============================================================================
  * 
+ * Example 1 - Using Slots (Variables):
+ * -------------------------------------
+ * LOAD 10
+ * SLOT 0       ; slots[0] = 10
+ * LOAD 5
+ * SLOT 1       ; slots[1] = 5
+ * FETCH 0      ; A = slots[0] = 10
+ * PUSH         ; stack = [10]
+ * FETCH 1      ; A = slots[1] = 5
+ * POP          ; A = 10 (from stack)
+ * OUT
+ * HALT
  * 
- * Example 3: Bit Operations
- * --------------------------
- * W 0x0000 0x1F   ; LOAD 15 (0b1111)
- * W 0x0001 0x5C   ; AND 12 (0b1100)
- * W 0x0002 0x70   ; OUT
- * W 0x0003 0xF0   ; HALT
- * G
+ * Example 2 - Page Switching:
+ * ----------------------------
+ * ; Page 0
+ * LOAD 5
+ * SLOT 0
+ * SETPAGE 1    ; Switch to page 1
+ * ; (continues on page 1 if loaded)
  * 
- * Output: [CORE1] A: 0x0C (12)
+ * Example 3 - Complex with Stack:
+ * --------------------------------
+ * LOAD 3
+ * SLOT 0       ; x = 3
+ * LOAD 4
+ * SLOT 1       ; y = 4
+ * FETCH 0      ; A = 3
+ * PUSH
+ * FETCH 1      ; A = 4
+ * PUSH
+ * POP          ; A = 4
+ * SLOT 2       ; temp = 4
+ * POP          ; A = 3
+ * FETCH 2      ; A = 4
+ * MUL 3        ; A = 12
+ * OUT
+ * HALT
  * 
  * ============================================================================
  */
