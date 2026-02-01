@@ -23,6 +23,12 @@ const uint8_t SYS_RESET = A0;
 #define OP_AND     0x50
 #define OP_OR      0x60
 #define OP_OUT     0x70
+
+#define OP_FETCH   0x80  // 추가된 슬롯 로드 (Slot n -> A)
+#define OP_SLOT    0x90  // 추가된 슬롯 저장 (A -> Slot n)
+#define OP_PUSH    0xA0  // 추가된 스택 푸시
+#define OP_POP     0xB0  // 추가된 스택 팝
+
 #define OP_SETPAGE 0xE0
 #define OP_HALT    0xF0
 
