@@ -40,7 +40,7 @@
 
 // VM State
 volatile uint8_t regA = 0x00;
-volatile uint8_t slots[16];        // 16 variable slots
+volatile uint8_t slots[16];        // 16 variable slots 데이터 크기 8비트로 취급.
 volatile uint8_t stack[8];         // 8-deep stack
 volatile uint8_t SP = 0;           // Stack pointer
 volatile uint8_t PC = 0;           // 페이지 내 오프셋 (0~127)
