@@ -4,7 +4,7 @@
 
 <item itemtype="MCU" CircId="mega328-2" mainComp="false" Show_id="true" Show_Val="false" Pos="384,-184" rotation="0" hflip="1" vflip="1" label="core2" idLabPos="3.73019,-18.7566" labelrot="0" valLabPos="-16,20" valLabRot="0" Frequency="16 MHz" Auto_Load="false" saveEepr="true" Logic_Symbol="false" Rst_enabled="false" Ext_Osc="false" Wdt_enabled="false" Clk_Out="false" MainMcu="false" SerialMon="-1" />
 
-<item itemtype="Subcircuit" CircId="74HC245-3" mainComp="false" Show_id="true" Show_Val="false" Pos="-216,-280" rotation="0" hflip="1" vflip="1" label="74HC245-core1Addr" idLabPos="-27.3054,97.6234" labelrot="0" valLabPos="-16,20" valLabRot="0" Input_High_V="2.5 V" Input_Low_V="2.5 V" Input_Imped="1e+09 Ω" Out_High_V="5 V" Out_Low_V="0 V" Out_Imped="40 Ω" Tpd_ps="10 ns" Tr_ps="3 ns" Tf_ps="4 ns" Logic_Symbol="true" />
+<item itemtype="Subcircuit" CircId="74HC245-3" mainComp="false" Show_id="true" Show_Val="false" Pos="-216,-280" rotation="0" hflip="1" vflip="1" label="74HC245-core1Addr" idLabPos="-22.6215,99.0701" labelrot="0" valLabPos="-16,20" valLabRot="0" Input_High_V="2.5 V" Input_Low_V="2.5 V" Input_Imped="1e+09 Ω" Out_High_V="5 V" Out_Low_V="0 V" Out_Imped="40 Ω" Tpd_ps="10 ns" Tr_ps="3 ns" Tf_ps="4 ns" Logic_Symbol="true" />
 
 <item itemtype="Subcircuit" CircId="74HC245-4" mainComp="false" Show_id="true" Show_Val="false" Pos="-216,-92" rotation="0" hflip="1" vflip="1" label="74HC245-core1Data" idLabPos="-23.8047,-15.099" labelrot="0" valLabPos="-16,20" valLabRot="0" Input_High_V="2.5 V" Input_Low_V="2.5 V" Input_Imped="1e+09 Ω" Out_High_V="5 V" Out_Low_V="0 V" Out_Imped="40 Ω" Tpd_ps="10 ns" Tr_ps="3 ns" Tf_ps="4 ns" Logic_Symbol="true" />
 
@@ -20,7 +20,7 @@
 <mainCompProps MainCompId="m328 TQFP-269" Frequency="16 MHz" Auto_Load="false" saveEepr="true" MainMcu="false" SerialMon="-1" />
 </item>
 
-<item itemtype="Memory" CircId="Memory-10" mainComp="false" Show_id="true" Show_Val="false" Pos="20,-152" rotation="90" hflip="1" vflip="1" label="28C256" idLabPos="-5.78387,15.679" labelrot="-90" valLabPos="-16,20" valLabRot="0" Address_Bits="15 _bits" Data_Bits="8 _bits" Persistent="false" Asynch="true" Input_High_V="2.5 V" Input_Low_V="2.5 V" Input_Imped="1000 MΩ" Out_High_V="5 V" Out_Low_V="0 V" Out_Imped="40 Ω" Inverted="false" Open_Collector="true" pd_n="1 _Gates" Tpd_ps="10 ns" Tr_ps="3 ns" Tf_ps="4 ns" />
+<item itemtype="Memory" CircId="Memory-10" mainComp="false" Show_id="true" Show_Val="false" Pos="20,-152" rotation="90" hflip="1" vflip="1" label="28C256" idLabPos="-5.57129,16.8748" labelrot="-90" valLabPos="-16,20" valLabRot="0" Address_Bits="15 _bits" Data_Bits="8 _bits" Persistent="false" Asynch="true" Input_High_V="2.5 V" Input_Low_V="2.5 V" Input_Imped="1000 MΩ" Out_High_V="5 V" Out_Low_V="0 V" Out_Imped="40 Ω" Inverted="false" Open_Collector="true" pd_n="1 _Gates" Tpd_ps="10 ns" Tr_ps="3 ns" Tf_ps="4 ns" />
 
 <item itemtype="Subcircuit" CircId="74HC595-11" mainComp="false" Show_id="true" Show_Val="false" Pos="-216,-380" rotation="0" hflip="1" vflip="1" label="74HC595-core1" idLabPos="0,-20" labelrot="0" valLabPos="-16,20" valLabRot="0" Input_High_V="2.5 V" Input_Low_V="2.5 V" Input_Imped="1e+09 Ω" Out_High_V="5 V" Out_Low_V="0 V" Out_Imped="40 Ω" Tpd_ps="10 ns" Tr_ps="3 ns" Tf_ps="4 ns" Logic_Symbol="true" />
 
@@ -83,6 +83,8 @@
 <item itemtype="Tunnel" CircId="Tunnel-103" mainComp="false" Show_id="false" Show_Val="false" Pos="312,-204" rotation="0" hflip="1" vflip="1" label="Tunnel-103" idLabPos="-16,-24" labelrot="0" valLabPos="-16,20" valLabRot="0" Name="DIR" IsBus="false" />
 
 <item itemtype="Tunnel" CircId="Tunnel-104" mainComp="false" Show_id="false" Show_Val="false" Pos="136,-12" rotation="0" hflip="1" vflip="1" label="Tunnel-104" idLabPos="-16,-24" labelrot="0" valLabPos="-16,20" valLabRot="0" Name="DIR" IsBus="false" />
+
+<item itemtype="TextComponent" CircId="TextComponent-105" mainComp="false" Show_id="false" Show_Val="false" Pos="-520,-648" rotation="0" hflip="1" vflip="1" label="TextComponent-105" idLabPos="-16,-24" labelrot="0" valLabPos="-16,20" valLabRot="0" Margin="5 _px" Border="1 _px" Color="#cacaca" Opacity="1" Font="courior new" Font_Color="#000080" Font_Size="10 _px" Fixed_Width="true" Text="LOAD&#xa;SLOT&#xa;FETCH&#xa;ADD/SUB/MUL/DIV&#xa;AND&#xa;OR&#xa;PUSH&#xa;POP&#xa;SETPAGE&#xa;NOP&#xa;HALT&#xa;OUT" />
 
 <item itemtype="Node" CircId="Node-20" mainComp="false" Pos="-496,-104" />
 
@@ -435,5 +437,7 @@
 <item itemtype="Connector" uid="Connector-428" startpinid="Tunnel-102-pin" endpinid="74HC245-4-AB/!BA" pointList="-284,-12,-224,-12" />
 
 <item itemtype="Connector" uid="Connector-429" startpinid="Tunnel-104-pin" endpinid="74HC245-5-AB/!BA" pointList="136,-12,192,-12" />
+
+<item itemtype="Connector" uid="Connector-430" startpinid="Tunnel-96-pin" endpinid="Tunnel-96-pin" pointList="-344,-500,-344,-500" />
 
 </circuit>
