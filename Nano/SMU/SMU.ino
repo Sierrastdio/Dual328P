@@ -1,22 +1,50 @@
 /*
  * ============================================================================
- * Arduino Nano #1 - SMU v4.0 (RESET 핀 완전 수정)
+ * Arduino Nano #1 - SMU v4.0 (595 Paging + Bank Control)
+ * ============================================================================
+ * 핀 배치:
+ * - D2~D7, A0~A1: 데이터 버스 (D0~D7)
+ * - D9: SCK (74HC595-SMU1, 74HC595-SMU2)
+ * - D10: RCK (74HC595-SMU1, 74HC595-SMU2)
+ * - D11: SER (74HC595-SMU1)
+ * - D12: ROM OE
+ * - D13: ROM WE
+ * - A2: System RESET (Core 1, 2)
+ * - A3: 74HC595 G# (Output Enable)
+ * - A4: 28C256 CE#
+ * - A5: 28C256 A14 (Bank Select) ← 추가!
+ * 
+ * 595 체인:
+ * - 595-SMU1: A0~A7 (QA~QH)
+ * - 595-SMU2: A8~A13 (QB~QG), QA는 N/C
+ * 
+ * Bank 시스템:
+ * - Bank 0 (A14=0): Core 1 영역 (0x0000~0x3FFF)
+ * - Bank 1 (A14=1): Core 2 영역 (0x4000~0x7FFF)
+ * 
+ * 사용법:
+ * - :w <bank> <page>
+ *   :w 0 0 → Core 1, Page 0
+ *   :w 1 0 → Core 2, Page 0
  * ============================================================================
  */
 
 #include <avr/io.h>
 
-const uint8_t HC595_SER  = 11;
-const uint8_t HC595_SCK  = 9;
-const uint8_t HC595_RCK  = 10;
-const uint8_t HC595_G    = A3;
+// 핀 정의
+const uint8_t HC595_SER  = 11;  // PB3
+const uint8_t HC595_SCK  = 9;   // PB1
+const uint8_t HC595_RCK  = 10;  // PB2
+const uint8_t HC595_G    = A3;  // PC3
 
-const uint8_t ROM_CE  = A4;
-const uint8_t ROM_OE  = 12;
-const uint8_t ROM_WE  = 13;
+const uint8_t ROM_CE   = A4;    // PC4
+const uint8_t ROM_OE   = 12;    // PB4
+const uint8_t ROM_WE   = 13;    // PB5
+const uint8_t ROM_A14  = A5;    // PC5 ← Bank Select
 
-const uint8_t SYS_RESET = A2;
+const uint8_t SYS_RESET = A2;   // PC2
 
+// 명령어 셋
 #define OP_NOP     0x00
 #define OP_LOAD    0x10
 #define OP_ADD     0x20
@@ -35,37 +63,36 @@ const uint8_t SYS_RESET = A2;
 #define MAX_PROG 512
 uint8_t prog_buf[MAX_PROG];
 uint16_t prog_sz = 0;
+
+uint8_t target_bank = 0;
 uint8_t current_page = 0;
 
 /*
  * ============================================================================
- * 데이터 버스 제어 - PC2 완전 보호
+ * 데이터 버스 제어
  * ============================================================================
  */
 inline void set_data_output() {
-    DDRD |= 0xFC;
-    DDRC |= 0x03;
+    DDRD |= 0b11111100;
+    DDRC |= 0b00000011;
 }
 
 inline void set_data_input() {
-    DDRD &= 0x03;
-    PORTD &= 0x03;
-    DDRC &= 0xFC;  // PC0, PC1만 입력으로
-    // PORTC 비트 개별 클리어 (PC2, PC3, PC4 보호)
-    PORTC &= ~(1 << 0);  // PC0 = 0
-    PORTC &= ~(1 << 1);  // PC1 = 0
-    // PC2, PC3, PC4는 건드리지 않음
+    DDRD &= 0b00000011;
+    PORTD &= 0b00000011;
+    DDRC &= 0b11111100;
+    PORTC &= ~(1 << 0);
+    PORTC &= ~(1 << 1);
 }
 
 inline void write_data_bus(uint8_t data) {
-    PORTD = (PORTD & 0x03) | ((data << 2) & 0xFC);
-    // PC0, PC1만 변경
-    PORTC = (PORTC & ~0x03) | (data >> 6);
+    PORTD = (PORTD & 0b00000011) | ((data << 2) & 0b11111100);
+    PORTC = (PORTC & ~0b00000011) | (data >> 6);
 }
 
 /*
  * ============================================================================
- * 74HC595 제어 매크로
+ * 74HC595 제어
  * ============================================================================
  */
 #define HC595_G_ENABLE()    PORTC &= ~(1 << 3)
@@ -79,7 +106,7 @@ inline void write_data_bus(uint8_t data) {
 
 /*
  * ============================================================================
- * ROM 제어 매크로
+ * ROM 제어
  * ============================================================================
  */
 #define ROM_CE_ENABLE()     PORTC &= ~(1 << 4)
@@ -88,15 +115,22 @@ inline void write_data_bus(uint8_t data) {
 #define ROM_OE_DISABLE()    PORTB |=  (1 << 4)
 #define ROM_WE_ENABLE()     PORTB &= ~(1 << 5)
 #define ROM_WE_DISABLE()    PORTB |=  (1 << 5)
+#define ROM_A14_LOW()       PORTC &= ~(1 << 5)
+#define ROM_A14_HIGH()      PORTC |=  (1 << 5)
 
 /*
  * ============================================================================
- * 시스템 제어 매크로
+ * 시스템 제어
  * ============================================================================
  */
 #define RESET_CORES()       PORTC &= ~(1 << 2)
 #define RELEASE_CORES()     PORTC |=  (1 << 2)
 
+/*
+ * ============================================================================
+ * 74HC595 시리얼 전송
+ * ============================================================================
+ */
 void shiftOut_fast(uint8_t data) {
     for(uint8_t i = 0; i < 8; i++) {
         if(data & 0x80) {
@@ -112,15 +146,25 @@ void shiftOut_fast(uint8_t data) {
     }
 }
 
+/*
+ * ============================================================================
+ * 주소 설정 (A0~A13, 14비트)
+ * ============================================================================
+ * 595-SMU1: A0~A7
+ * 595-SMU2: A8~A13 (QA는 N/C, QB~QG 사용)
+ */
 void setAddr(uint16_t addr) {
-    addr &= 0x3FFF;
+    addr &= 0b0011111111111111;  // 14비트
     
     HC595_RCK_LOW();
     
-    uint8_t high_byte = (addr >> 7) & 0x7F;
+    // 상위 바이트 (A8~A13, 6비트) - 595-SMU2
+    // QA=N/C이므로 1비트 패딩 추가
+    uint8_t high_byte = (addr >> 7) & 0b01111111;
     shiftOut_fast(high_byte);
     
-    uint8_t low_byte = addr & 0xFF;
+    // 하위 바이트 (A0~A7) - 595-SMU1
+    uint8_t low_byte = addr & 0b11111111;
     shiftOut_fast(low_byte);
     
     HC595_RCK_HIGH();
@@ -128,6 +172,11 @@ void setAddr(uint16_t addr) {
     HC595_RCK_LOW();
 }
 
+/*
+ * ============================================================================
+ * ROM 쓰기
+ * ============================================================================
+ */
 void writeROM(uint16_t addr, uint8_t data) {
     HC595_G_ENABLE();
     setAddr(addr);
@@ -149,14 +198,25 @@ void writeROM(uint16_t addr, uint8_t data) {
     set_data_input();
 }
 
+/*
+ * ============================================================================
+ * 물리 주소 계산
+ * ============================================================================
+ */
 uint16_t calcPhysicalAddr(uint8_t page, uint8_t offset) {
-    offset &= 0x7F;
+    offset &= 0b01111111;  // 0~127
     uint16_t addr = ((uint16_t)page << 7) | offset;
     
+    // 16KB 초과 체크
     if(addr >= 0x4000) return 0xFFFF;
     return addr;
 }
 
+/*
+ * ============================================================================
+ * 어셈블리 파싱
+ * ============================================================================
+ */
 void processLine(String line) {
     if (prog_sz >= MAX_PROG) {
         Serial.println(F("FULL"));
@@ -203,6 +263,11 @@ void processLine(String line) {
     }
 }
 
+/*
+ * ============================================================================
+ * 명령어 처리
+ * ============================================================================
+ */
 void handleCommand() {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
@@ -214,33 +279,57 @@ void handleCommand() {
             return;
         }
         
-        current_page = cmd.substring(3).toInt();
-        
-        if(current_page > 127) {
-            Serial.println(F("PAGE!"));
+        // :w <bank> <page> 파싱
+        int first_space = cmd.indexOf(' ', 3);
+        if(first_space == -1) {
+            Serial.println(F("USAGE: :w <bank> <page>"));
             return;
+        }
+        
+        target_bank = cmd.substring(3, first_space).toInt();
+        current_page = cmd.substring(first_space + 1).toInt();
+        
+        if(target_bank > 1) {
+            Serial.println(F("BANK! (0-1)"));
+            return;
+        }
+        if(current_page > 127) {
+            Serial.println(F("PAGE! (0-127)"));
+            return;
+        }
+        
+        // Bank 설정
+        if(target_bank == 0) {
+            ROM_A14_LOW();   // Bank 0
+        } else {
+            ROM_A14_HIGH();  // Bank 1
         }
         
         RESET_CORES();
         delay(10);
         
+        Serial.print(F("B"));
+        Serial.print(target_bank);
+        Serial.print(F(":P"));
+        Serial.print(current_page);
+        Serial.print(F(" "));
         Serial.print(prog_sz);
-        Serial.print(F("B->P"));
-        Serial.println(current_page);
+        Serial.println(F("B"));
         
+        // 프로그램 쓰기
         for(uint16_t i = 0; i < prog_sz; i++) {
-            uint8_t page_offset = i & 0x7F;
+            uint8_t page_offset = i & 0b01111111;
             uint8_t write_page = current_page + (i >> 7);
             
             uint16_t phys_addr = calcPhysicalAddr(write_page, page_offset);
             if(phys_addr == 0xFFFF) {
-                Serial.println(F("OVER!"));
+                Serial.println(F("\nOVER!"));
                 break;
             }
             
             writeROM(phys_addr, prog_buf[i]);
             
-            if((i & 0x3F) == 0x3F) Serial.print('.');
+            if((i & 0b00111111) == 0b00111111) Serial.print('.');
         }
         
         Serial.println(F("\nOK"));
@@ -266,13 +355,13 @@ void setup() {
     Serial.begin(115200);
     
     // DDR 설정
-    DDRB |= 0x0E;  // PB1~3 (595)
-    DDRB |= 0x30;  // PB4~5 (ROM)
-    DDRC |= 0x04;  // PC2 (RESET) - 출력
-    DDRC |= 0x08;  // PC3 (595 G#)
-    DDRC |= 0x10;  // PC4 (ROM CE#)
+    DDRB |= 0b00001110;  // PB1~3 (595)
+    DDRB |= 0b00110000;  // PB4~5 (ROM OE, WE)
+    DDRC |= 0b00000100;  // PC2 (RESET)
+    DDRC |= 0b00001000;  // PC3 (595 G#)
+    DDRC |= 0b00010000;  // PC4 (ROM CE#)
+    DDRC |= 0b00100000;  // PC5 (ROM A14) ← 추가!
     
-    // 데이터 버스 입력 (이때 PC2 보호됨)
     set_data_input();
     
     // 초기 상태
@@ -280,15 +369,17 @@ void setup() {
     ROM_CE_DISABLE();
     ROM_OE_DISABLE();
     ROM_WE_DISABLE();
+    ROM_A14_LOW();      // Bank 0 기본
     
-    // 리셋 상태로 시작
     RESET_CORES();
     
+    target_bank = 0;
     current_page = 0;
     prog_sz = 0;
     
-    Serial.println(F("SMU v4.0"));
-    Serial.println(F(":w<p>,:run,:r,:clear"));
+    Serial.println(F("SMU v4.0 (595)"));
+    Serial.println(F(":w <bank> <page>"));
+    Serial.println(F(":run, :r, :clear"));
 }
 
 void loop() {
