@@ -208,8 +208,8 @@ void output_register(uint8_t value) {
  * ============================================================================
  */
 void execute(uint8_t instruction) {
-    uint8_t opcode  = instruction & 0xF0;
-    uint8_t operand = instruction & 0x0F;
+    uint8_t opcode  = instruction & 0xF0;   //logical regiser 1
+    uint8_t operand = instruction & 0x0F;   //logical regiser 2
 
     switch(opcode) {
         case OP_NOP:
