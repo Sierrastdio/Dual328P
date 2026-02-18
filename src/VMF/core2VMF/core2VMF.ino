@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- * Core 2 - Virtual Machine Firmware v4.2 (PAGE_REG 추가)
+ * Core 2 - Virtual Machine Firmware v4.3 (완료 신호 추가)
  * ============================================================================
  * 핀 배치:
  * - PD2~7, PB0~1: 데이터 버스 (D0~D7) → 74HC245 데이터버퍼#2
@@ -9,13 +9,16 @@
  * - PD1: 74HC595-Core2 SCK (Shift Clock)
  * - PC3: 74HC595-Core2 RCK (Latch Clock)
  * - PC4: N/C
- * - PC5: N/C
+ * - PC5: 작업 완료 신호 (Core 1으로 전송)
  * 
  * 페이징 시스템:
  * - 74HC595로 A7~A13 제어 (7비트)
  * - 128페이지 × 128바이트 = 16KB 접근 가능
  * - slots[15] = PAGE_REG (페이지 전용 레지스터)
- * - SETPAGE는 PAGE_REG 값으로 0~127 전체 접근
+ * 
+ * 핸드셰이크:
+ * - 작업 시작: PC5 = LOW
+ * - 작업 완료: PC5 = HIGH
  * ============================================================================
  */
 
@@ -40,8 +43,7 @@
 
 // VM State
 volatile uint8_t regA = 0x00;
-volatile uint8_t slots[16];        // 16 variable slots
-                                   // slots[15] = PAGE_REG (예약)
+volatile uint8_t slots[16];
 volatile uint8_t stack[8];
 volatile uint8_t stack_ptr = 0;
 volatile uint8_t PC = 0;
@@ -51,7 +53,7 @@ volatile bool halted = false;
 // Page Cache
 volatile uint8_t cached_page = 0xFF;
 
-// PAGE_REG: slots[15]를 페이지 전용 레지스터로 예약
+// PAGE_REG
 #define PAGE_REG slots[15]
 
 // 74HC595 Control
@@ -62,11 +64,15 @@ volatile uint8_t cached_page = 0xFF;
 #define HC595_RCK_HIGH()    PORTC |=  (1 << 3)  // PC3 = 1
 #define HC595_RCK_LOW()     PORTC &= ~(1 << 3)  // PC3 = 0
 
+// 핸드셰이크 신호 (Core 2 → Core 1)
+#define SIGNAL_BUSY()       PORTC &= ~(1 << 5)  // PC5 = LOW (작업 중)
+#define SIGNAL_DONE()       PORTC |=  (1 << 5)  // PC5 = HIGH (완료)
+
 #define SYNC_DELAY()        asm volatile("nop\n\t nop\n\t nop\n\t nop\n\t")
 
 /*
  * ============================================================================
- * 74HC595 페이지 설정 (A7~A13, 7비트)
+ * 74HC595 페이지 설정
  * ============================================================================
  */
 void set_page_595(uint8_t page) {
@@ -98,16 +104,13 @@ void set_page_595(uint8_t page) {
 
 /*
  * ============================================================================
- * 주소 버스 설정 (A0~A6, 7비트)
+ * 주소 버스 설정
  * ============================================================================
  */
 inline void set_addr_bus(uint8_t addr) {
     addr &= 0b01111111;
 
-    // A0~A3 (PB2~5)
     PORTB = (PORTB & 0b11000011) | ((addr & 0b00001111) << 2);
-
-    // A4~A6 (PC0~2)
     PORTC = (PORTC & 0b11111000) | ((addr >> 4) & 0b00000111);
 }
 
@@ -195,8 +198,8 @@ void output_register(uint8_t value) {
  * ============================================================================
  */
 void execute(uint8_t instruction) {
-    uint8_t opcode  = instruction & 0xF0;   //logical regiser 1
-    uint8_t operand = instruction & 0x0F;   //logical regiser 2
+    uint8_t opcode  = instruction & 0xF0;
+    uint8_t operand = instruction & 0x0F;
 
     switch(opcode) {
         case OP_NOP:
@@ -251,8 +254,6 @@ void execute(uint8_t instruction) {
             break;
 
         case OP_SETPAGE:
-            // PAGE_REG(slots[15]) 값으로 페이지 전환
-            // operand 무시, 0~127 전체 접근 가능
             current_page = PAGE_REG & 0b01111111;
             PC = 0;
             set_page_595(current_page);
@@ -270,13 +271,12 @@ void execute(uint8_t instruction) {
 void setup() {
     set_data_input();
 
-    DDRB |= 0b00111100;  // PB2~5
-    DDRC |= 0b00000111;  // PC0~2
+    DDRB |= 0b00111100;  // PB2~5 출력
+    DDRC |= 0b00000111;  // PC0~2 출력
 
-    DDRD |= 0b00000011;  // PD0~1
-    DDRC |= 0b00001000;  // PC3
-
-    // PC4, PC5 N/C
+    DDRD |= 0b00000011;  // PD0~1 출력 (595)
+    DDRC |= 0b00001000;  // PC3 출력 (595 RCK)
+    DDRC |= 0b00100000;  // PC5 출력 (완료 신호) ← 추가!
 
     regA = 0x00;
     PC = 0;
@@ -288,9 +288,11 @@ void setup() {
     for(uint8_t i = 0; i < 16; i++) slots[i] = 0;
     for(uint8_t i = 0; i < 8; i++) stack[i] = 0;
 
-    // PAGE_REG 초기화 (0페이지)
     PAGE_REG = 0;
     set_page_595(0);
+
+    // 초기 상태: 완료 신호 (Core 1이 먼저 시작)
+    SIGNAL_DONE();
 
     _delay_ms(100);
 }
@@ -298,51 +300,52 @@ void setup() {
 void loop() {
     if(halted) {
         set_high_z();
+        SIGNAL_DONE();  // 완료 신호 유지
         _delay_ms(100);
         return;
     }
 
+    // 작업 시작 신호
+    SIGNAL_BUSY();
+
+    // Fetch-Decode-Execute
     uint8_t instruction = fetch();
     execute(instruction);
 
+    // PC 증가
     PC++;
     if(PC >= 128) {
         PC = 0;
     }
 
+    // 버스 반납
     set_high_z();
+
+    // 작업 완료 신호
+    SIGNAL_DONE();
+
+    // Core 1이 버스 사용할 시간
     _delay_us(50);
+
     _delay_us(10);
 }
 
 /*
  * ============================================================================
- * PAGE_REG 사용 예시
+ * 핸드셰이크 프로토콜
  * ============================================================================
  *
- * ; 페이지 1 이동 (단순)
- * LOAD 1
- * SLOT 15     ; PAGE_REG = 1
- * SETPAGE     ; 1페이지로 전환
+ * Core 2의 동작:
+ * 1. SIGNAL_DONE() 상태로 대기
+ * 2. Core 1이 버스 양보하면 시작
+ * 3. SIGNAL_BUSY() - 작업 중 신호
+ * 4. Fetch-Execute 수행
+ * 5. SIGNAL_DONE() - 완료 신호
+ * 6. Core 1이 버스 재획득
  *
- * ; 페이지 100 이동 (연산)
- * LOAD 10
- * MUL 10      ; regA = 100
- * SLOT 15     ; PAGE_REG = 100
- * LOAD 5      ; regA 자유롭게 사용 가능
- * SETPAGE     ; 100페이지로 전환
+ * Core 1이 받는 신호:
+ * - PC5 = LOW  : Core 2 작업 중 (대기)
+ * - PC5 = HIGH : Core 2 완료 (버스 사용 가능)
  *
- * ; 페이지 127 이동 (최대)
- * LOAD 15
- * MUL 8       ; regA = 120
- * ADD 7       ; regA = 127
- * SLOT 15     ; PAGE_REG = 127
- * SETPAGE     ; 127페이지로 전환
- *
- * ============================================================================
- * slots 사용 가능 범위
- * ============================================================================
- * - slots[0]  ~ slots[14]: 일반 변수 (15개)
- * - slots[15]: PAGE_REG 예약 (페이지 전환 전용)
  * ============================================================================
  */

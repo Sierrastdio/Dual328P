@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- * Core 1 - Virtual Machine Firmware v4.2 (PAGE_REG 추가)
+ * Core 1 - Virtual Machine Firmware v4.3 (핸드셰이크 추가)
  * ============================================================================
  * 핀 배치:
  * - PD2~7, PB0~1: 데이터 버스 (D0~D7) → 74HC245 데이터버퍼#1
@@ -8,14 +8,17 @@
  * - PD0: 74HC595-Core1 SER (Serial Data)
  * - PD1: 74HC595-Core1 SCK (Shift Clock)
  * - PC3: 74HC595-Core1 RCK (Latch Clock)
- * - PC4: Core Select (0=Core1 Active) + EEPROM A14 → 74HC04, 28C256
- * - PC5: DIR (모든 74HC245 방향 제어)
+ * - PC4: Core Select (0=Core1 Active) + EEPROM A14
+ * - PC5: Core 2 완료 신호 입력 (LOW=작업중, HIGH=완료)
  * 
  * 페이징 시스템:
  * - 74HC595로 A7~A13 제어 (7비트)
  * - 128페이지 × 128바이트 = 16KB 접근 가능
  * - slots[15] = PAGE_REG (페이지 전용 레지스터)
- * - SETPAGE는 PAGE_REG 값으로 0~127 전체 접근
+ * 
+ * 핸드셰이크:
+ * - Core 2가 PC5로 완료 신호 전송
+ * - Core 1은 PC5를 폴링하여 Core 2 완료 감지
  * ============================================================================
  */
 
@@ -40,27 +43,25 @@
 
 // VM State
 volatile uint8_t regA = 0x00;
-volatile uint8_t slots[16];        // 16 variable slots
-                                   // slots[15] = PAGE_REG (예약)
+volatile uint8_t slots[16];
 volatile uint8_t stack[8];
 volatile uint8_t stack_ptr = 0;
-volatile uint8_t PC = 0;           // 페이지 내 오프셋 (0~127)
-volatile uint8_t current_page = 0; // 현재 페이지 (0~127)
+volatile uint8_t PC = 0;
+volatile uint8_t current_page = 0;
 volatile bool halted = false;
 
 // Page Cache
 volatile uint8_t cached_page = 0xFF;
 
-// PAGE_REG: slots[15]를 페이지 전용 레지스터로 예약
-// SLOT 15  → PAGE_REG에 저장
-// SETPAGE  → PAGE_REG 값(0~127)으로 페이지 전환
+// PAGE_REG
 #define PAGE_REG slots[15]
 
 // Hardware Control Macros
 #define ACTIVATE_CORE1()    PORTC &= ~(1 << 4)  // PC4 = 0
 #define RELEASE_TO_CORE2()  PORTC |=  (1 << 4)  // PC4 = 1
-#define SET_BUS_READ()      PORTC &= ~(1 << 5)  // PC5 = 0
-#define SET_BUS_WRITE()     PORTC |=  (1 << 5)  // PC5 = 1
+
+// Core 2 완료 신호 읽기
+#define IS_CORE2_DONE()     (PINC & (1 << 5))   // PC5 = HIGH이면 완료
 
 // 74HC595 Control
 #define HC595_SER_HIGH()    PORTD |=  (1 << 0)  // PD0 = 1
@@ -74,7 +75,7 @@ volatile uint8_t cached_page = 0xFF;
 
 /*
  * ============================================================================
- * 74HC595 페이지 설정 (A7~A13, 7비트)
+ * 74HC595 페이지 설정
  * ============================================================================
  */
 void set_page_595(uint8_t page) {
@@ -82,7 +83,6 @@ void set_page_595(uint8_t page) {
 
     if(page == cached_page) return;
 
-    // 루프 전에 저장
     cached_page = page;
 
     HC595_RCK_LOW();
@@ -107,16 +107,13 @@ void set_page_595(uint8_t page) {
 
 /*
  * ============================================================================
- * 주소 버스 설정 (A0~A6, 7비트)
+ * 주소 버스 설정
  * ============================================================================
  */
 inline void set_addr_bus(uint8_t addr) {
     addr &= 0b01111111;
 
-    // A0~A3 (PB2~5)
     PORTB = (PORTB & 0b11000011) | ((addr & 0b00001111) << 2);
-
-    // A4~A6 (PC0~2)
     PORTC = (PORTC & 0b11111000) | ((addr >> 4) & 0b00000111);
 }
 
@@ -165,12 +162,11 @@ inline void set_high_z() {
 
 /*
  * ============================================================================
- * Fetch: ROM에서 명령어 읽기
+ * Fetch
  * ============================================================================
  */
 uint8_t fetch() {
     ACTIVATE_CORE1();
-    SET_BUS_READ();
     set_data_input();
 
     DDRB |= 0b00111100;  // PB2~5
@@ -190,7 +186,6 @@ uint8_t fetch() {
  * ============================================================================
  */
 void output_register(uint8_t value) {
-    SET_BUS_WRITE();
     set_data_output();
 
     write_data_bus(value);
@@ -198,8 +193,19 @@ void output_register(uint8_t value) {
     SYNC_DELAY();
     _delay_us(50);
 
-    SET_BUS_READ();
     set_data_input();
+}
+
+/*
+ * ============================================================================
+ * Core 2 완료 대기
+ * ============================================================================
+ */
+inline void wait_for_core2() {
+    // Core 2가 완료 신호(HIGH)를 보낼 때까지 대기
+    while(!IS_CORE2_DONE()) {
+        _delay_us(1);
+    }
 }
 
 /*
@@ -208,8 +214,8 @@ void output_register(uint8_t value) {
  * ============================================================================
  */
 void execute(uint8_t instruction) {
-    uint8_t opcode  = instruction & 0xF0;   //logical regiser 1
-    uint8_t operand = instruction & 0x0F;   //logical regiser 2
+    uint8_t opcode  = instruction & 0xF0;
+    uint8_t operand = instruction & 0x0F;
 
     switch(opcode) {
         case OP_NOP:
@@ -244,7 +250,6 @@ void execute(uint8_t instruction) {
             break;
 
         case OP_FETCH:
-            // slots[15](PAGE_REG) 읽기는 허용하되 쓰기는 SLOT 15로만
             regA = slots[operand & 0x0F];
             break;
 
@@ -265,8 +270,6 @@ void execute(uint8_t instruction) {
             break;
 
         case OP_SETPAGE:
-            // PAGE_REG(slots[15]) 값으로 페이지 전환
-            // operand 무시, 0~127 전체 접근 가능
             current_page = PAGE_REG & 0b01111111;
             PC = 0;
             set_page_595(current_page);
@@ -284,16 +287,16 @@ void execute(uint8_t instruction) {
 void setup() {
     set_data_input();
 
-    DDRB |= 0b00111100;  // PB2~5
-    DDRC |= 0b00000111;  // PC0~2
+    DDRB |= 0b00111100;  // PB2~5 출력
+    DDRC |= 0b00000111;  // PC0~2 출력
 
-    DDRD |= 0b00000011;  // PD0~1
-    DDRC |= 0b00001000;  // PC3
-
-    DDRC |= 0b00110000;  // PC4~5
+    DDRD |= 0b00000011;  // PD0~1 출력 (595)
+    DDRC |= 0b00001000;  // PC3 출력 (595 RCK)
+    DDRC |= 0b00010000;  // PC4 출력 (Core Select)
+    DDRC &= ~0b00100000; // PC5 입력 (Core 2 완료 신호) ← 입력!
+    PORTC &= ~(1 << 5);  // 풀업 비활성화
 
     ACTIVATE_CORE1();
-    SET_BUS_READ();
 
     regA = 0x00;
     PC = 0;
@@ -305,7 +308,6 @@ void setup() {
     for(uint8_t i = 0; i < 16; i++) slots[i] = 0;
     for(uint8_t i = 0; i < 8; i++) stack[i] = 0;
 
-    // PAGE_REG 초기화 (0페이지)
     PAGE_REG = 0;
     set_page_595(0);
 
@@ -320,17 +322,24 @@ void loop() {
         return;
     }
 
+    // Fetch-Decode-Execute
     uint8_t instruction = fetch();
     execute(instruction);
 
+    // PC 증가
     PC++;
     if(PC >= 128) {
         PC = 0;
     }
 
+    // 버스 반납 (Core 2에게 양보)
     set_high_z();
     RELEASE_TO_CORE2();
-    _delay_us(50);
+
+    // Core 2 완료 대기
+    wait_for_core2();
+
+    // 버스 재획득
     ACTIVATE_CORE1();
 
     _delay_us(10);
@@ -338,13 +347,31 @@ void loop() {
 
 /*
  * ============================================================================
+ * 핸드셰이크 프로토콜
+ * ============================================================================
+ *
+ * Core 1의 동작:
+ * 1. ACTIVATE_CORE1() - 버스 획득
+ * 2. Fetch-Execute 수행
+ * 3. RELEASE_TO_CORE2() - 버스 양보
+ * 4. wait_for_core2() - Core 2 완료 대기
+ * 5. ACTIVATE_CORE1() - 버스 재획득
+ *
+ * Core 2 신호 (PC5):
+ * - LOW  : 작업 중 (대기 필요)
+ * - HIGH : 완료 (버스 재획득 가능)
+ *
+ * 핀 연결:
+ * - Core 2 PC5 (출력) → Core 1 PC5 (입력)
+ *
+ * ============================================================================
  * PAGE_REG 사용 예시
  * ============================================================================
  *
  * ; 페이지 1 이동 (단순)
  * LOAD 1
  * SLOT 15     ; PAGE_REG = 1
- * SETPAGE     ; 1페이지로 전환, regA 영향 없음
+ * SETPAGE     ; 1페이지로 전환
  *
  * ; 페이지 100 이동 (연산)
  * LOAD 10
