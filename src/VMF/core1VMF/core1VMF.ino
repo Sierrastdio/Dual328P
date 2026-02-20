@@ -43,7 +43,7 @@
 
 // VM State
 volatile uint8_t regA = 0x00;
-volatile uint8_t slots[16];
+volatile uint8_t slots[15]; // 4비트 명령어 + 4비트 데이터 읽기 방식이라 16개만 사용가능.
 volatile uint8_t stack[8];
 volatile uint8_t stack_ptr = 0;
 volatile uint8_t PC = 0;
@@ -128,9 +128,9 @@ inline void set_data_output() {
 }
 
 inline void set_data_input() {
-    DDRD &= 0b00000011;
+    DDRD  &= 0b00000011;
     PORTD &= 0b00000011;
-    DDRB &= 0b11111100;
+    DDRB  &= 0b11111100;
     PORTB &= 0b11111100;
 }
 
@@ -149,14 +149,14 @@ inline uint8_t read_data_bus() {
  * ============================================================================
  */
 inline void set_high_z() {
-    DDRD &= 0b00000011;
+    DDRD  &= 0b00000011;
     PORTD &= 0b00000011;
-    DDRB &= 0b11111100;
+    DDRB  &= 0b11111100;
     PORTB &= 0b11111100;
 
-    DDRB &= 0b11000011;
+    DDRB  &= 0b11000011;
     PORTB &= 0b11000011;
-    DDRC &= 0b11111000;
+    DDRC  &= 0b11111000;
     PORTC &= 0b11111000;
 }
 

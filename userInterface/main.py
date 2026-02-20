@@ -14,7 +14,7 @@ def find_arduino_port():
             return port.device
     if ports:
         return ports[0].device
-    return "COM4" ############################ 포트 설정 확인하기#############################
+    return "COM4" ############################ Arduino IDE 에서 포트 확인하기#############################
 
 SERIAL_PORT = find_arduino_port()
 BAUD_RATE = 115200
@@ -283,7 +283,7 @@ if __name__ == "__main__":
     print(f"Auto-detected port: {SERIAL_PORT}")
     IBM5100App().run()
 
-'''
+''' 
 **예제 프로그램 1 - 간단한 연산:**
 ```
 0000: LOAD 10

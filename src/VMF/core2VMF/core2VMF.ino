@@ -43,7 +43,7 @@
 
 // VM State
 volatile uint8_t regA = 0x00;
-volatile uint8_t slots[16];
+volatile uint8_t slots[15]; // 4비트 명령어 + 4비트 데이터 읽기 방식이라 16개만 사용가능.
 volatile uint8_t stack[8];
 volatile uint8_t stack_ptr = 0;
 volatile uint8_t PC = 0;
