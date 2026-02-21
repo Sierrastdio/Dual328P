@@ -7,12 +7,12 @@
  * - D9: SCK (74HC595-SMU1, 74HC595-SMU2)
  * - D10: RCK (74HC595-SMU1, 74HC595-SMU2)
  * - D11: SER (74HC595-SMU1)
- * - D12: ROM OE
- * - D13: ROM WE
+ * - D12: RAM OE
+ * - D13: RAM WE
  * - A2: System RESET (Core 1, 2)
  * - A3: 74HC595 G# (Output Enable)
- * - A4: 28C256 CE#
- * - A5: 28C256 A14 (Bank Select) ← 추가!
+ * - A4: 62256 CE#
+ * - A5: 62256 A14 (Bank Select) ← 추가!
  * 
  * 595 체인:
  * - 595-SMU1: A0~A7 (QA~QH)
@@ -37,10 +37,10 @@ const uint8_t HC595_SCK  = 9;   // PB1
 const uint8_t HC595_RCK  = 10;  // PB2
 const uint8_t HC595_G    = A3;  // PC3
 
-const uint8_t ROM_CE   = A4;    // PC4
-const uint8_t ROM_OE   = 12;    // PB4
-const uint8_t ROM_WE   = 13;    // PB5
-const uint8_t ROM_A14  = A5;    // PC5 ← Bank Select
+const uint8_t RAM_CE   = A4;    // PC4
+const uint8_t RAM_OE   = 12;    // PB4
+const uint8_t RAM_WE   = 13;    // PB5
+const uint8_t RAM_A14  = A5;    // PC5 ← Bank Select
 
 const uint8_t SYS_RESET = A2;   // PC2
 
@@ -106,17 +106,17 @@ inline void write_data_bus(uint8_t data) {
 
 /*
  * ============================================================================
- * ROM 제어
+ * RAM 제어
  * ============================================================================
  */
-#define ROM_CE_ENABLE()     PORTC &= ~(1 << 4)
-#define ROM_CE_DISABLE()    PORTC |=  (1 << 4)
-#define ROM_OE_ENABLE()     PORTB &= ~(1 << 4)
-#define ROM_OE_DISABLE()    PORTB |=  (1 << 4)
-#define ROM_WE_ENABLE()     PORTB &= ~(1 << 5)
-#define ROM_WE_DISABLE()    PORTB |=  (1 << 5)
-#define ROM_A14_LOW()       PORTC &= ~(1 << 5)
-#define ROM_A14_HIGH()      PORTC |=  (1 << 5)
+#define RAM_CE_ENABLE()     PORTC &= ~(1 << 4)
+#define RAM_CE_DISABLE()    PORTC |=  (1 << 4)
+#define RAM_OE_ENABLE()     PORTB &= ~(1 << 4)
+#define RAM_OE_DISABLE()    PORTB |=  (1 << 4)
+#define RAM_WE_ENABLE()     PORTB &= ~(1 << 5)
+#define RAM_WE_DISABLE()    PORTB |=  (1 << 5)
+#define RAM_A14_LOW()       PORTC &= ~(1 << 5)
+#define RAM_A14_HIGH()      PORTC |=  (1 << 5)
 
 /*
  * ============================================================================
@@ -174,26 +174,25 @@ void setAddr(uint16_t addr) {
 
 /*
  * ============================================================================
- * ROM 쓰기
+ * RAM 쓰기
  * ============================================================================
  */
-void writeROM(uint16_t addr, uint8_t data) {
+void writeRAM(uint16_t addr, uint8_t data) {
     HC595_G_ENABLE();
     setAddr(addr);
     
     set_data_output();
     write_data_bus(data);
     
-    ROM_CE_ENABLE();
-    ROM_OE_DISABLE();
-    ROM_WE_ENABLE();
+    RAM_CE_ENABLE();
+    RAM_OE_DISABLE();
+    RAM_WE_ENABLE();
     
     delayMicroseconds(1);
     
-    ROM_WE_DISABLE();
-    ROM_CE_DISABLE();
+    RAM_WE_DISABLE();
+    RAM_CE_DISABLE();
     
-    delay(10);
     
     set_data_input();
 }
@@ -300,9 +299,9 @@ void handleCommand() {
         
         // Bank 설정
         if(target_bank == 0) {
-            ROM_A14_LOW();   // Bank 0
+            RAM_A14_LOW();   // Bank 0
         } else {
-            ROM_A14_HIGH();  // Bank 1
+            RAM_A14_HIGH();  // Bank 1
         }
         
         RESET_CORES();
@@ -327,7 +326,7 @@ void handleCommand() {
                 break;
             }
             
-            writeROM(phys_addr, prog_buf[i]);
+            writeRAM(phys_addr, prog_buf[i]);
             
             if((i & 0b00111111) == 0b00111111) Serial.print('.');
         }
@@ -356,20 +355,20 @@ void setup() {
     
     // DDR 설정
     DDRB |= 0b00001110;  // PB1~3 (595)
-    DDRB |= 0b00110000;  // PB4~5 (ROM OE, WE)
+    DDRB |= 0b00110000;  // PB4~5 (RAM OE, WE)
     DDRC |= 0b00000100;  // PC2 (RESET)
     DDRC |= 0b00001000;  // PC3 (595 G#)
-    DDRC |= 0b00010000;  // PC4 (ROM CE#)
-    DDRC |= 0b00100000;  // PC5 (ROM A14) ← 추가!
+    DDRC |= 0b00010000;  // PC4 (RAM CE#)
+    DDRC |= 0b00100000;  // PC5 (RAM A14) ← 추가!
     
     set_data_input();
     
     // 초기 상태
     HC595_G_DISABLE();
-    ROM_CE_DISABLE();
-    ROM_OE_DISABLE();
-    ROM_WE_DISABLE();
-    ROM_A14_LOW();      // Bank 0 기본
+    RAM_CE_DISABLE();
+    RAM_OE_DISABLE();
+    RAM_WE_DISABLE();
+    RAM_A14_LOW();      // Bank 0 기본
     
     RESET_CORES();
     
