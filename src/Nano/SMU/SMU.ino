@@ -337,7 +337,7 @@ void handleCommand() {
         RELEASE_CORES();
         Serial.println(F("RUN"));
     }
-    else if (cmd == ":r") {
+    else if (cmd == ":rst") {
         RESET_CORES();
         Serial.println(F("RST"));
     }
@@ -378,7 +378,7 @@ void setup() {
     
     Serial.println(F("SMU v4.0 (595)"));
     Serial.println(F(":w <bank> <page>"));
-    Serial.println(F(":run, :r, :clear"));
+    Serial.println(F(":run, :rst, :clear"));
 }
 
 void loop() {
