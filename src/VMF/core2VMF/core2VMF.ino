@@ -14,7 +14,7 @@
  * 페이징 시스템:
  * - 74HC595로 A7~A13 제어 (7비트)
  * - 128페이지 × 128바이트 = 16KB 접근 가능
- * - slots[15] = PAGE_REG (페이지 전용 레지스터)
+ * - slot[15] = PAGE_REG (페이지 전용 레지스터)
  * 
  * 핸드셰이크:
  * - 작업 시작: PC5 = LOW
@@ -43,7 +43,7 @@
 
 // VM State
 volatile uint8_t regA = 0x00;
-volatile uint8_t slots[15]; // 4비트 명령어 + 4비트 데이터 읽기 방식이라 16개만 사용가능.
+volatile uint8_t slot[15]; // 4비트 명령어 + 4비트 데이터 읽기 방식이라 16개만 사용가능.
 volatile uint8_t stack[8];
 volatile uint8_t stack_ptr = 0;
 volatile uint8_t PC = 0;
@@ -54,7 +54,7 @@ volatile bool halted = false;
 volatile uint8_t cached_page = 0xFF;
 
 // PAGE_REG
-#define PAGE_REG slots[15]
+#define PAGE_REG slot[15]
 
 // 74HC595 Control
 #define HC595_SER_HIGH()    PORTD |=  (1 << 0)  // PD0 = 1
@@ -234,11 +234,11 @@ void execute(uint8_t instruction) {
             break;
 
         case OP_FETCH:
-            regA = slots[operand & 0x0F];
+            regA = slot[operand & 0x0F];
             break;
 
         case OP_SLOT:
-            slots[operand & 0x0F] = regA;
+            slot[operand & 0x0F] = regA;
             break;
 
         case OP_PUSH:
@@ -285,7 +285,7 @@ void setup() {
     cached_page = 0xFF;
     halted = false;
 
-    for(uint8_t i = 0; i < 16; i++) slots[i] = 0;
+    for(uint8_t i = 0; i < 16; i++) slot[i] = 0;
     for(uint8_t i = 0; i < 8; i++) stack[i] = 0;
 
     PAGE_REG = 0;
