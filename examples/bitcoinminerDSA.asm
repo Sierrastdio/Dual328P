@@ -1,4 +1,5 @@
 ; ========================================
+; slot[15]이 페이지 레지스터로 지정되면서 삭제 예정.
 ; BITCOIN MINER EMULATOR ON SMU v4.0
 ; SHA-256 ASIC Simulation
 ; All numbers in DECIMAL only
