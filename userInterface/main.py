@@ -19,7 +19,7 @@ def find_arduino_port():
 SERIAL_PORT = find_arduino_port()
 BAUD_RATE = 115200
 
-class IBM5100App(App):
+class RAMprogrammer(App):
     CSS = """
     Screen { background: #080C14; }
     #main_layout { height: 1fr; }
@@ -50,7 +50,7 @@ class IBM5100App(App):
         yield Header()
         yield Horizontal(
             Vertical(
-                Static(" EDITOR (SMU v2.1) ", classes="panel_title"),
+                Static(" EDITOR ", classes="panel_title"),
                 TextArea("0000: ", id="code_editor"),
                 id="left_panel"
             ),
@@ -224,7 +224,6 @@ class IBM5100App(App):
         event.input.value = ":"
 
     def send_command(self, cmd):
-        """단순 명령 전송"""
         if not self.ser or not self.ser.is_open:
             self.notify("Not connected!", severity="error")
             return False
@@ -239,21 +238,17 @@ class IBM5100App(App):
             return False
 
     def upload(self, bank, page):
-        """코드 업로드"""
         if not self.ser or not self.ser.is_open:
             self.notify("Not connected!", severity="error")
             return False
         
         try:
-            # 버퍼 클리어
             self.ser.reset_input_buffer()
             self.ser.reset_output_buffer()
             
-            # 이전 버퍼 클리어
             self.ser.write(b":clear\n")
             time.sleep(0.1)
 
-            # 코드 라인별 전송 (간단!)
             line_count = 0
             for line in self.editor.text.split("\n"):
                 inst = line[6:].strip()
@@ -262,7 +257,6 @@ class IBM5100App(App):
                     time.sleep(0.03)
                     line_count += 1
 
-            # 쓰기 명령
             self.ser.write(f":w {bank} {page}\n".encode())
             time.sleep(0.5)
             
@@ -281,50 +275,4 @@ class IBM5100App(App):
 
 if __name__ == "__main__":
     print(f"Auto-detected port: {SERIAL_PORT}")
-    IBM5100App().run()
-
-''' 
-**예제 프로그램 1 - 간단한 연산:**
-```
-0000: LOAD 10
-0001: ADD 5
-0002: MUL 2
-0003: OUT
-0004: HALT
-```
-결과: (10 + 5) × 2 = 30
-
-**예제 프로그램 2 - 페이징 사용:**
-```
-0000: LOAD 5
-0001: SETPAGE 1
-0002: OUT
-0003: HALT
-```
-
-**예제 프로그램 3 - 비트 연산:**
-```
-0000: LOAD 15
-0001: AND 12
-0002: OR 1
-0003: OUT
-0004: HALT
-```
-결과: (15 & 12) | 1 = 13
-
-**통신 프로토콜 (단순화):**
-```
-Python → Arduino:
-LOAD 10          (어셈블리 라인 직접 전송)
-ADD 5
-OUT
-HALT
-:w 0 0           (Bank 0, Page 0에 쓰기)
-:run             (실행)
-:r               (리셋)
-:clear           (클리어)
-
-Arduino → Python:
-OK               (모든 명령에 OK만 응답)
-*/
-'''
+    RAMprogrammer().run()
