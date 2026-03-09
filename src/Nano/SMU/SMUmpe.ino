@@ -63,14 +63,13 @@ const uint8_t SYS_RESET = A2;   // PC2
 #define OP_HALT    0xF0
 
 // ── 프로그램 버퍼 ────────────────────────────────────────────────────────────
-// 페이지 한 장 = 최대 128 명령어. 여유있게 256 확보.
 #define MAX_PROG 256
 uint8_t  prog_buf[MAX_PROG];
 uint16_t prog_sz = 0;
 
 uint8_t target_bank  = 0;
 uint8_t current_page = 0;
-bool    cores_reset  = false;   // 업로드 중 RESET 상태 추적
+bool    cores_reset  = false;
 
 // ── 데이터 버스 ──────────────────────────────────────────────────────────────
 inline void set_data_output() {
@@ -127,10 +126,10 @@ void shiftOut_fast(uint8_t data) {
 
 // ── 주소 설정 ────────────────────────────────────────────────────────────────
 void setAddr(uint16_t addr) {
-    addr &= 0x3FFF;  // 14비트
+    addr &= 0x3FFF;
     HC595_RCK_LOW();
-    shiftOut_fast((addr >> 7) & 0x7F);  // A8~A13 (595-SMU2, QA=N/C)
-    shiftOut_fast(addr & 0xFF);          // A0~A7  (595-SMU1)
+    shiftOut_fast((addr >> 7) & 0x7F);
+    shiftOut_fast(addr & 0xFF);
     HC595_RCK_HIGH();
     asm volatile("nop\n\t");
     HC595_RCK_LOW();
@@ -138,7 +137,6 @@ void setAddr(uint16_t addr) {
 
 // ── RAM 쓰기 ────────────────────────────────────────────────────────────────
 void writeRAM(uint16_t addr, uint8_t data) {
-    HC595_G_ENABLE();
     setAddr(addr);
     set_data_output();
     write_data_bus(data);
@@ -155,12 +153,11 @@ void writeRAM(uint16_t addr, uint8_t data) {
 uint16_t calcPhysicalAddr(uint8_t page, uint8_t offset) {
     offset &= 0x7F;
     uint16_t addr = ((uint16_t)page << 7) | offset;
-    if (addr >= 0x4000) return 0xFFFF;  // 16KB 초과
+    if (addr >= 0x4000) return 0xFFFF;
     return addr;
 }
 
 // ── 인라인 주석 제거 ─────────────────────────────────────────────────────────
-// "SLOT 15    ; PAGE_REG" → "SLOT 15"
 String stripComment(String line) {
     int ci = line.indexOf(';');
     if (ci != -1) line = line.substring(0, ci);
@@ -176,11 +173,11 @@ void processLine(String line) {
     }
 
     line.trim();
-    line = stripComment(line);   // 인라인 ; 주석 제거
+    line = stripComment(line);
     line.toUpperCase();
 
-    if (line.length() == 0) return;    // 빈 줄 / 주석만 있던 줄
-    if (line.startsWith(";")) return;  // (stripComment 후에도 안전망)
+    if (line.length() == 0) return;
+    if (line.startsWith(";")) return;
 
     int space = line.indexOf(' ');
     String inst    = (space == -1) ? line : line.substring(0, space);
@@ -206,7 +203,6 @@ void processLine(String line) {
     else if (inst == "HALT")    { opcode = OP_HALT; }
     else if (inst == "NOP")     { opcode = OP_NOP; }
     else {
-        // 알 수 없는 명령어 무시 (에디터의 빈 줄·주석 잔여물 대응)
         return;
     }
 
@@ -226,7 +222,7 @@ void processLine(String line) {
 // ── 명령 처리 ────────────────────────────────────────────────────────────────
 void handleCommand() {
     String cmd = Serial.readStringUntil('\n');
-    cmd.trim();   // \r\n 모두 제거 (Windows 호환)
+    cmd.trim();
     if (cmd.length() == 0) return;
 
     // ── :clear ────────────────────────────────────────────────────────────
@@ -243,7 +239,6 @@ void handleCommand() {
             return;
         }
 
-        // 파싱: ":w <bank> <page>"
         String args      = cmd.substring(3);
         args.trim();
         int sp           = args.indexOf(' ');
@@ -267,17 +262,16 @@ void handleCommand() {
             return;
         }
 
-        // 첫 업로드이거나 bank 전환 시 RESET
         if (!cores_reset) {
             RESET_CORES();
             delay(5);
             cores_reset = true;
         }
 
-        // Bank 설정
+        HC595_G_ENABLE();   // ← 주소 버스 Hi-Z 해제 (595 출력 활성)
+
         if (target_bank == 0) RAM_A14_LOW(); else RAM_A14_HIGH();
 
-        // 헤더 응답
         Serial.print(F("B"));
         Serial.print(target_bank);
         Serial.print(F(":P"));
@@ -286,7 +280,6 @@ void handleCommand() {
         Serial.print(prog_sz);
         Serial.println(F("B"));
 
-        // RAM 쓰기
         for (uint16_t i = 0; i < prog_sz; i++) {
             uint8_t  pg_offset = i & 0x7F;
             uint8_t  write_pg  = current_page + (i >> 7);
@@ -301,15 +294,22 @@ void handleCommand() {
             if ((i & 0x3F) == 0x3F) Serial.print('.');
         }
 
-        prog_sz = 0;   // 다음 페이지를 위해 버퍼 초기화
+        prog_sz = 0;
         Serial.println(F("\nOK"));
         return;
     }
 
     // ── :run ─────────────────────────────────────────────────────────────
     if (cmd == ":run") {
+        // 버스 완전 해제 (Core에게 버스 권한 양도)
+        set_data_input();     // 데이터 버스 Hi-Z
+        HC595_G_DISABLE();    // 주소 버스 Hi-Z (595 출력 비활성)
+        RAM_CE_DISABLE();     // CE# High
+        RAM_OE_DISABLE();     // OE# High
+        RAM_WE_DISABLE();     // WE# High
+
         cores_reset = false;
-        RELEASE_CORES();
+        RELEASE_CORES();      // RESET 해제 → Core 시작
         Serial.println(F("RUN"));
         return;
     }
@@ -322,7 +322,7 @@ void handleCommand() {
         return;
     }
 
-    // ── 명령어 라인 (LOAD, ADD, ...) ─────────────────────────────────────
+    // ── 명령어 라인 ───────────────────────────────────────────────────────
     processLine(cmd);
 }
 
@@ -330,12 +330,12 @@ void handleCommand() {
 void setup() {
     Serial.begin(115200);
 
-    DDRB |= 0b00001110;  // PB1~3 (595 SCK/RCK/SER)
-    DDRB |= 0b00110000;  // PB4~5 (RAM OE, WE)
-    DDRC |= 0b00000100;  // PC2   (RESET)
-    DDRC |= 0b00001000;  // PC3   (595 G#)
-    DDRC |= 0b00010000;  // PC4   (RAM CE#)
-    DDRC |= 0b00100000;  // PC5   (RAM A14)
+    DDRB |= 0b00001110;
+    DDRB |= 0b00110000;
+    DDRC |= 0b00000100;
+    DDRC |= 0b00001000;
+    DDRC |= 0b00010000;
+    DDRC |= 0b00100000;
 
     set_data_input();
 
