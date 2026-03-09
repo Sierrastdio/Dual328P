@@ -14,9 +14,9 @@
  * - A4: 62256 CE#
  * - A5: 62256 A14 (Bank Select)
  *
- * 595 체인:
- * - 595-SMU1: A0~A7 (QA~QH)
- * - 595-SMU2: A8~A13 (QB~QG), QA는 N/C
+ * 595 체인 방향: SER(D11) → SMU1 → SMU2
+ * - 595-SMU1: QA~QH = A0~A7  (8비트 전부 사용)
+ * - 595-SMU2: QB~QG = A8~A13 (6비트, QA/QH=N/C)
  *
  * Bank 시스템:
  * - Bank 0 (A14=0): Core 1 영역 (0x0000~0x3FFF)
@@ -125,11 +125,23 @@ void shiftOut_fast(uint8_t data) {
 }
 
 // ── 주소 설정 ────────────────────────────────────────────────────────────────
+// 체인 방향: SER(D11) → SMU1 → SMU2
+// 첫 번째 shiftOut → SMU1을 통과해 SMU2로 밀려남
+// 두 번째 shiftOut → SMU1에 남음
+//
+// SMU1 비트-핀 매핑 (8비트 전부):
+//   bit7→QH=A7, bit6→QG=A6, bit5→QF=A5, bit4→QE=A4,
+//   bit3→QD=A3, bit2→QC=A2, bit1→QB=A1, bit0→QA=A0
+//
+// SMU2 비트-핀 매핑 (6비트, QB~QG):
+//   bit7→QH=N/C, bit6→QG=A13, bit5→QF=A12, bit4→QE=A11,
+//   bit3→QD=A10, bit2→QC=A9,  bit1→QB=A8,  bit0→QA=N/C
+//   → A8~A13을 bit1~6에 올려야 함: ((addr>>8) & 0x3F) << 1
 void setAddr(uint16_t addr) {
     addr &= 0x3FFF;
     HC595_RCK_LOW();
-    shiftOut_fast((addr >> 7) & 0x7F);
-    shiftOut_fast(addr & 0xFF);
+    shiftOut_fast(((addr >> 8) & 0x3F) << 1);  // → SMU2 (A8~A13, QB~QG) ✓
+    shiftOut_fast(addr & 0xFF);                  // → SMU1 (A0~A7,  QA~QH) ✓
     HC595_RCK_HIGH();
     asm volatile("nop\n\t");
     HC595_RCK_LOW();
@@ -268,7 +280,7 @@ void handleCommand() {
             cores_reset = true;
         }
 
-        HC595_G_ENABLE();   // ← 주소 버스 Hi-Z 해제 (595 출력 활성)
+        HC595_G_ENABLE();
 
         if (target_bank == 0) RAM_A14_LOW(); else RAM_A14_HIGH();
 
@@ -301,15 +313,14 @@ void handleCommand() {
 
     // ── :run ─────────────────────────────────────────────────────────────
     if (cmd == ":run") {
-        // 버스 완전 해제 (Core에게 버스 권한 양도)
-        set_data_input();     // 데이터 버스 Hi-Z
-        HC595_G_DISABLE();    // 주소 버스 Hi-Z (595 출력 비활성)
-        RAM_CE_DISABLE();     // CE# High
-        RAM_OE_DISABLE();     // OE# High
-        RAM_WE_DISABLE();     // WE# High
+        set_data_input();
+        HC595_G_DISABLE();
+        RAM_CE_DISABLE();
+        RAM_OE_DISABLE();
+        RAM_WE_DISABLE();
 
         cores_reset = false;
-        RELEASE_CORES();      // RESET 해제 → Core 시작
+        RELEASE_CORES();
         Serial.println(F("RUN"));
         return;
     }
