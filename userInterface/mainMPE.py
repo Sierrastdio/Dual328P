@@ -16,6 +16,9 @@ MAX_LINES_PER_PAGE = 128
 
 class LightProgrammer:
     def __init__(self, stdscr):
+        # ESC 반응 속도 최적화 (단위: 밀리초)
+        curses.set_escdelay(25)
+
         self.stdscr = stdscr
 
         self.pages = [[""]]
