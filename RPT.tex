@@ -1,0 +1,71 @@
+\documentclass[a4paper, 12pt]{article}
+\usepackage{kotex}
+
+\usepackage[a4paper, margin=2.5cm]{geometry}
+\usepackage{tocloft}
+% Preamble에 추가
+\usepackage{microtype}
+\usepackage{setspace}
+
+
+\begin{document}
+
+% 1. 타이틀 전용 페이지 시작 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\begin{titlepage}
+    \centering
+    \vspace*{3cm}
+    {\large \textbf{청덕고등학교 3학년 과학과제연구}} \par
+    \vspace*{2.5cm}
+    
+    {\Huge \textbf{멀티 프로세서와 단일 프로세서의} \par}
+    {\Huge \textbf{작업 효율성 비교분석} \par}
+    \vspace{10.0cm}
+    {\Large \textbf{TES}\par}
+    \vspace{2cm}
+    {\large 청덕고등학교 \par}
+    
+    \vfill % 나머지 공간을 채움
+    
+    {\large 작성시작일: 2026-3-14 \par}
+    \vspace{2cm}
+\end{titlepage}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+% 1. 기본 제목을 비워버립니다. (정렬 문제 해결)
+\renewcommand{\contentsname}{}
+
+% 2. 수동으로 가운데 정렬된 제목을 만듭니다.
+\begin{center}
+    \Large\bfseries 차\kern 30pt 례
+\end{center}
+\tableofcontents
+
+\newpage % 차례가 끝나고 다음 페이지에서 본문을 시작하게 함
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\section{연구의 요약}
+\subsection{연구동기, 목적}
+\begin{spacing}{1.5}
+\fontdimen2\font=0.7em
+컴퓨터에 사용되는 일부 프로그램등은 컴퓨터의 CPU에 큰 부담을 주기도 하는데 이때 시스템 모니터링 기능을 통해 CPU의 사용량을 확인하면 CPU의 코어 일부에만 사용량이 집중되어 있기도 한다. \par
+이러한 경험을 통해 CPU의 병렬화, 부하 분산에대한 관심을 가지게 되었으며 이에 '작업의 분산의 효율성'에 초점을 맞추어 작업을 분산하는것이 그렇지 않은것보다 정확히 어떤 면에서 장점을 가지는지에 대해 연구를 계획하였다.
+\end{spacing}
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+\newpage
+\section{연구의 실행}
+\subsection{이론적 배경 및 선행연구}
+\begin{spacing}{1.5}
+\fontdimen2\font=0.7em
+컴퓨터 프로세서(Processor)란 컴퓨터 시스템의 핵심 부품으로, 외부로부터 입력받은 데이터를 프로그램의 명령에 따라 처리, 연산하고 그 결과를 출력하는 중앙 처리 장치(CPU)를 의미한다. 멀티 프로세서는 하나의 컴퓨터 시스템 내에 2개 이상의 중앙처리장치(CPU)를 장착하여, 메모리와 입출력 장치를 공유하며 병렬 처리를 수행하는 시스템을 말한다. 
+
+멀티프로세서는 크게 대칭형 멀티프로세서읜 SMP와 비대칭형 멀티프로세서인 AMP 분류되며 SMP의 경우 모든 프로세서가 운영체제나 작업 관리 면에서 동일한 권한을 가지며 이는 어떤 프로세서든 시스템 내의 모든 메모리와 I/O에 접근할 수 있어 부하 분산에 유리함을 뜻한다. AMP의 경우는 주(Master) 프로세서가 시스템을 제어하고 스케줄링을 담당하며, 부(Slave) 프로세서는 주 프로세서의 명령에 따라 특정 작업만 수행한다.
+\end{spacing}
+
+\subsection{연구주제의 선정}
+
+\subsection{연구 방법 및 과정}
+
+\section{연구 결과 및 시사점}
+\section{참고 문헌}
+
+
+\end{document}
