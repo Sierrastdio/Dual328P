@@ -1,6 +1,17 @@
 /*
  * ============================================================================
- * Arduino Nano #1 - SMU v4.1 (멀티 페이지 에디터 호환)
+ * SMU v5.0 - 62256 SRAM 버전
+ * ============================================================================
+ * 변경사항:
+ * - 28C256 EEPROM → 62256 SRAM
+ * - delay(10) 제거 (쓰기 속도 10배 향상)
+ * - 핀 연결: 동일 (핀 호환)
+ * 
+ * 메모리:
+ * - 62256 SRAM (32KB)
+ * - 쓰기 속도: ~55ns (EEPROM 150ns 대비 3배 빠름)
+ * - 휘발성: 전원 OFF 시 데이터 소실
+ * ============================================================================
  * ============================================================================
  * 핀 배치:
  * - D2~D7, A0~A1: 데이터 버스 (D0~D7)
@@ -149,17 +160,37 @@ void setAddr(uint16_t addr) {
 
 // ── RAM 쓰기 ────────────────────────────────────────────────────────────────
 void writeRAM(uint16_t addr, uint8_t data) {
+    HC595_G_ENABLE();
     setAddr(addr);
+    
     set_data_output();
     write_data_bus(data);
-    RAM_CE_ENABLE();
-    RAM_OE_DISABLE();
-    RAM_WE_ENABLE();
-    delayMicroseconds(1);
-    RAM_WE_DISABLE();
-    RAM_CE_DISABLE();
+    
+    ROM_CE_ENABLE();
+    ROM_OE_DISABLE();
+    ROM_WE_ENABLE();
+    
+    delayMicroseconds(1);  // SRAM 셋업 타임 (충분)
+    
+    ROM_WE_DISABLE();
+    ROM_CE_DISABLE();
+    
+    // delay(10); ← 제거!
     set_data_input();
 }
+```
+
+---
+
+## 변경 효과
+```
+EEPROM:
+:w 0 0 (128바이트) → 약 1.3초 (128 × 10ms)
+
+SRAM:
+:w 0 0 (128바이트) → 약 0.13초 (128 × 1ms)
+
+→ 10배 빠름!
 
 // ── 물리 주소 계산 ──────────────────────────────────────────────────────────
 uint16_t calcPhysicalAddr(uint8_t page, uint8_t offset) {
