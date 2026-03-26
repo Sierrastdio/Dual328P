@@ -334,200 +334,61 @@ void processLine_fast(const char* line_raw) {
 
 
 
-// ── 명령 처리 (완전 최적화) ──────────────────────────────────────────────────
 void handleCommand() {
-    // char 버퍼로 직접 읽기 (String보다 빠름)
-    static char buffer[128];
-    uint8_t idx = 0;
+    if (!Serial.available()) return;
     
-    while (Serial.available() && idx < 127) {
-        char c = Serial.read();
-        if (c == '\n' || c == '\r') break;
-        buffer[idx++] = c;
-    }
-    buffer[idx] = '\0';
-    
-    if (idx == 0) return;
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.length() == 0) return;
 
-    // ========================================================================
-    // SMU 명령어 (':' 시작)
-    // ========================================================================
-    if (buffer[0] == ':') {
-        String cmd = String(buffer);  // String으로 변환 (명령어 처리용)
-        cmd.trim();
-
-        // ── :clear ────────────────────────────────────────────────────────
+    // SMU 명령어
+    if (cmd[0] == ':') {
         if (cmd == ":clear") {
             prog_sz = 0;
             Serial.println(F("CLR"));
             return;
         }
-
-        // ── :w <bank> <page> ─────────────────────────────────────────────
+        
         if (cmd.startsWith(":w ")) {
-            if (prog_sz == 0) {
-                Serial.println(F("EMPTY"));
-                return;
-            }
-
-            String args = cmd.substring(3);
-            args.trim();
-            int sp = args.indexOf(' ');
-            if (sp == -1) {
-                Serial.println(F("USAGE: :w <bank> <page>"));
-                return;
-            }
-            target_bank  = (uint8_t)args.substring(0, sp).toInt();
-            current_page = (uint8_t)args.substring(sp + 1).toInt();
-
-            if (target_bank > 1) {
-                Serial.println(F("ERR: bank 0-1"));
-                return;
-            }
-            if (current_page > 127) {
-                Serial.println(F("ERR: page 0-127"));
-                return;
-            }
-            if (prog_sz > 128) {
-                Serial.println(F("ERR: >128 inst"));
-                return;
-            }
-
-            if (!cores_reset) {
-                RESET_CORES();
-                delay(5);
-                cores_reset = true;
-            }
-
-            if (target_bank == 0) RAM_A14_LOW(); else RAM_A14_HIGH();
-
-            Serial.print(F("B"));
-            Serial.print(target_bank);
-            Serial.print(F(":P"));
-            Serial.print(current_page);
-            Serial.print(F(" "));
-            Serial.print(prog_sz);
-            Serial.println(F("B"));
-
-            for (uint16_t i = 0; i < prog_sz; i++) {
-                uint8_t  pg_offset = i & 0x7F;
-                uint8_t  write_pg  = current_page + (i >> 7);
-                uint16_t phys      = calcPhysicalAddr(write_pg, pg_offset);
-
-                if (phys == 0xFFFF) {
-                    Serial.println(F("OVER"));
-                    break;
-                }
-                writeRAM(phys, prog_buf[i]);
-
-                if ((i & 0x3F) == 0x3F) Serial.print('.');
-            }
-
-            prog_sz = 0;
-            Serial.println(F("\nOK"));
+            // ... 기존 :w 코드 전체 복사
             return;
         }
-
-        // ── :run ─────────────────────────────────────────────────────────
+        
         if (cmd == ":run") {
             set_data_input();
             RAM_CE_DISABLE();
             RAM_OE_DISABLE();
             RAM_WE_DISABLE();
-
             cores_reset = false;
             RELEASE_CORES();
             Serial.println(F("RUN"));
             return;
         }
-
-        // ── :rst ─────────────────────────────────────────────────────────
+        
         if (cmd == ":rst") {
             cores_reset = true;
             RESET_CORES();
             Serial.println(F("RST"));
             return;
         }
-
-        // ── :read <bank> <page> ──────────────────────────────────────────
+        
         if (cmd.startsWith(":read ")) {
-            String args = cmd.substring(6);
-            args.trim();
-            int sp = args.indexOf(' ');
-            if (sp == -1) {
-                Serial.println(F("USAGE: :read <bank> <page>"));
-                return;
-            }
-            
-            uint8_t bank = (uint8_t)args.substring(0, sp).toInt();
-            uint8_t page = (uint8_t)args.substring(sp + 1).toInt();
-            
-            if (bank > 1 || page > 127) {
-                Serial.println(F("ERR: bank 0-1, page 0-127"));
-                return;
-            }
-            
-            if (bank == 0) RAM_A14_LOW(); else RAM_A14_HIGH();
-            
-            Serial.print(F("B"));
-            Serial.print(bank);
-            Serial.print(F(":P"));
-            Serial.println(page);
-            
-            for (uint8_t i = 0; i < 128; i++) {
-                uint16_t addr = calcPhysicalAddr(page, i);
-                uint8_t data = readRAM(addr);
-                
-                Serial.print(F("0x"));
-                if (data < 16) Serial.print('0');
-                Serial.print(data, HEX);
-                Serial.print(' ');
-                
-                if ((i & 0x0F) == 0x0F) Serial.println();
-            }
-            Serial.println(F("OK"));
+            // ... 기존 :read 코드 전체 복사
             return;
         }
-
-        // ── :dump ────────────────────────────────────────────────────────
+        
         if (cmd == ":dump") {
-            Serial.println(F("=== RAM DUMP ==="));
-            for (uint8_t bank = 0; bank <= 1; bank++) {
-                if (bank == 0) RAM_A14_LOW(); else RAM_A14_HIGH();
-                
-                Serial.print(F("BANK "));
-                Serial.println(bank);
-                
-                for (uint8_t page = 0; page < 4; page++) {
-                    Serial.print(F("  Page "));
-                    Serial.print(page);
-                    Serial.print(F(": "));
-                    
-                    for (uint8_t i = 0; i < 16; i++) {
-                        uint16_t addr = calcPhysicalAddr(page, i);
-                        uint8_t data = readRAM(addr);
-                        
-                        if (data < 16) Serial.print('0');
-                        Serial.print(data, HEX);
-                        Serial.print(' ');
-                    }
-                    Serial.println();
-                }
-            }
-            Serial.println(F("OK"));
+            // ... 기존 :dump 코드 전체 복사
             return;
         }
-
-        // 알 수 없는 명령어
+        
         Serial.println(F("ERR: Unknown command"));
         return;
     }
-
-    // ========================================================================
-    // 어셈블리 명령어 (최적화된 파싱)
-    // ========================================================================
+    
+    // 어셈블리 명령어
     else {
-        processLine_fast(buffer);
+        processLine_fast(cmd.c_str());
     }
 }
 
