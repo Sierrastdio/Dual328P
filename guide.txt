@@ -1,0 +1,87 @@
+말씀하신 내용
+아두이노 IDE 켜서 연결과정부터 경로 이동까지 차례대로 설명해줘
+
+
+
+그리고 같은걸 쿠분투 기준으로도 설명해줘
+
+Gemini의 응답
+네, 아두이노 IDE를 활용하여 **ACG(나노)**를 굽는 과정부터 터미널을 이용한 퓨즈 비트 수정까지, 윈도우와 쿠분투(KDE Plasma) 환경별로 나누어 상세히 설명해 드릴게요.
+
+1. 공통 준비 단계 (하드웨어 연결)
+**우노(A, 라이터)**를 PC에 USB로 연결합니다.
+
+아두이노 IDE를 엽니다.
+
+파일 > 예제 > 11.ArduinoISP > ArduinoISP를 클릭하여 코드를 불러옵니다.
+
+툴 > 보드에서 'Arduino Uno' 선택, 포트에서 우노가 연결된 포트를 선택합니다.
+
+업로드 버튼을 눌러 우노를 '라이터'로 만듭니다.
+
+이제 앞서 작성한 표대로 우노(A)와 나노(B)를 ISP 핀으로 연결합니다. (우노 RESET-5V 사이 10uF 콘덴서 잊지 마세요!)
+
+2. Windows 환경 (PowerShell 기준)
+윈도우에서는 아두이노 IDE 설치 폴더 내에 숨겨진 avrdude 실행 파일을 직접 찾아가야 합니다.
+
+① 경로 이동
+보통 아두이노 IDE 2.x 버전 기준 경로는 다음과 같습니다. (사용자 이름 User는 본인 계정명으로 바꾸세요.)
+
+Win + X 누르고 **Terminal (PowerShell)**을 켭니다.
+
+아래 명령어를 복사해서 붙여넣으세요. (경로가 다를 수 있으니 cd를 치고 폴더를 찾아가도 됩니다.)
+
+PowerShell
+cd "C:\Users\User\AppData\Local\Arduino15\packages\arduino\tools\avrdude\6.3.0-arduino17\bin"
+② 퓨즈 비트 굽기
+경로 이동 후 아래 명령어를 한 줄씩 입력합니다. (우노 포트가 COM3이라고 가정합니다.)
+
+연결 확인:
+
+PowerShell
+.\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -v
+16MHz CKOUT 설정 (나노 유전자 조작):
+
+PowerShell
+.\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:w:0xBF:m
+3. Kubuntu (Ubuntu KDE) 환경
+쿠분투는 패키지 관리자가 강력해서 과정이 훨씬 단순하고 직관적입니다. 특히 씽크패드 X1 카본에서 터미널(Konsole)을 쓰시면 아주 쾌적할 거예요.
+
+① avrdude 설치
+쿠분투에서는 경로를 찾아다닐 필요 없이 시스템 전역에 avrdude를 설치해버리는 게 가장 편합니다.
+
+F4나 Ctrl + Alt + T를 눌러 Konsole을 켭니다.
+
+아래 명령어로 설치합니다.
+
+Bash
+sudo apt update
+sudo apt install avrdude
+② 사용자 권한 설정 (중요)
+리눅스에서는 USB 포트 접근 권한이 필요합니다. 현재 사용자를 dialout 그룹에 추가해야 나중에 sudo 없이도 쓸 수 있습니다.
+
+Bash
+sudo usermod -a -G dialout $USER
+(명령어 입력 후 로그아웃했다가 다시 로그인해야 적용됩니다.)
+
+③ 퓨즈 비트 굽기
+리눅스에서는 포트 이름이 COM이 아니라 /dev/ttyACM0 또는 /dev/ttyUSB0 형태입니다.
+
+포트 확인: 우노를 꽂은 상태에서 ls /dev/ttyACM* 또는 ls /dev/ttyUSB*를 쳐서 이름을 확인하세요.
+
+연결 확인:
+
+Bash
+avrdude -c avrisp -p m328p -P /dev/ttyACM0 -b 19200 -v
+16MHz CKOUT 설정:
+
+Bash
+avrdude -c avrisp -p m328p -P /dev/ttyACM0 -b 19200 -U lfuse:w:0xBF:m
+💡 요약 및 팁
+Windows: AppData 폴더 안의 깊숙한 경로로 cd 해서 들어가서 실행해야 함.
+
+Kubuntu: sudo apt install avrdude 한 번이면 어디서든 avrdude 명령어를 바로 쓸 수 있어 훨씬 편함.
+
+성공 확인: 굽기가 끝나면 나노(B)의 **8번 핀(D8)**을 오실로스코프로 찍어보세요. 코드를 넣지 않았는데도 16MHz 사각파가 나오고 있다면 성공입니다.
+
+이제 씽크패드에서 쿠분투 터미널 열고 바로 작업 시작해보시면 되겠네요! 리눅스 환경에서 avrdude 관련해서 권한 에러(Permission denied)가 나면 당황하지 마시고 명령어 앞에 sudo를 붙여보세요. 조립 전 마지막 관문입니다. 파이팅입니다!
