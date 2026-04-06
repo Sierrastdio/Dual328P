@@ -1,40 +1,24 @@
-말씀하신 내용
-아두이노 IDE 켜서 연결과정부터 경로 이동까지 차례대로 설명해줘
+우노(A, 라이터)를 PC에 USB로 연결합니다.
 
+아두이노 IDE에서
 
+파일 > 예제 > 11.ArduinoISP > ArduinoISP 를 선택해 라이터로 쓸 우노에 업로드
 
-그리고 같은걸 쿠분투 기준으로도 설명해줘
+--------------------------------------------------------------------------------------------------------------------------
 
-Gemini의 응답
-네, 아두이노 IDE를 활용하여 **ACG(나노)**를 굽는 과정부터 터미널을 이용한 퓨즈 비트 수정까지, 윈도우와 쿠분투(KDE Plasma) 환경별로 나누어 상세히 설명해 드릴게요.
+이제 아래 작성한 표대로 라이터 우노(A)와 ACG 나노(B)를 연결:
 
-1. 공통 준비 단계 (하드웨어 연결)
-**우노(A, 라이터)**를 PC에 USB로 연결합니다.
+A D10 -> B RESET
+A D11 -> B D11
+A D12 -> B D12
+A D13 -> B D13
+A 5V  -> B 5V
+A GND -> B GND
 
-아두이노 IDE를 엽니다.
-
-파일 > 예제 > 11.ArduinoISP > ArduinoISP를 클릭하여 코드를 불러옵니다.
-
-툴 > 보드에서 'Arduino Uno' 선택, 포트에서 우노가 연결된 포트를 선택합니다.
-
-업로드 버튼을 눌러 우노를 '라이터'로 만듭니다.
-
-이제 앞서 작성한 표대로 우노(A)와 나노(B)를 ISP 핀으로 연결합니다. (우노 RESET-5V 사이 10uF 콘덴서 잊지 마세요!)
+컴퓨터와 라이터 아두이노(A)를 업로드 케이블로 연결.
 
 2. Windows 환경 (PowerShell 기준)
-윈도우에서는 아두이노 IDE 설치 폴더 내에 숨겨진 avrdude 실행 파일을 직접 찾아가야 합니다.
-
-① 경로 이동
-보통 아두이노 IDE 2.x 버전 기준 경로는 다음과 같습니다. (사용자 이름 User는 본인 계정명으로 바꾸세요.)
-
-Win + X 누르고 **Terminal (PowerShell)**을 켭니다.
-
-아래 명령어를 복사해서 붙여넣으세요. (경로가 다를 수 있으니 cd를 치고 폴더를 찾아가도 됩니다.)
-
-PowerShell
 cd "C:\Users\sierra\AppData\Local\Arduino15\packages\arduino\tools\avrdude\6.3.0-arduino17\bin"
-② 퓨즈 비트 굽기
-경로 이동 후 아래 명령어를 한 줄씩 입력합니다. (우노 포트가 COM3이라고 가정합니다.)
 
 연결 확인:PowerShell
 .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -v
@@ -46,7 +30,6 @@ cd "C:\Users\sierra\AppData\Local\Arduino15\packages\arduino\tools\avrdude\6.3.0
 
 클럭 읽기 모드 설정: PowerShell
 .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:w:0xE0:m
-
 
 ===============================================
 3. Kubuntu (Ubuntu KDE) 환경
