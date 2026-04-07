@@ -31,7 +31,7 @@ cd "C:\Users\sierra\AppData\Local\Arduino15\packages\arduino\tools\avrdude\6.3.0
 클럭 읽기 모드 설정: PowerShell
 .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:w:0xE0:m
 
-===============================================
+=============================================================================================================================================
 3. Kubuntu (Ubuntu KDE) 환경
 쿠분투는 패키지 관리자가 강력해서 과정이 훨씬 단순하고 직관적입니다. 특히 씽크패드 X1 카본에서 터미널(Konsole)을 쓰시면 아주 쾌적할 거예요.
 
