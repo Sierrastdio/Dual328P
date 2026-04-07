@@ -1,6 +1,3 @@
 {
     "C_Cpp.errorSquiggles": "disabled",
-    "markdownlint.config": {
-        "MD060": false
-    }
 }

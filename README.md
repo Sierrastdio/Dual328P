@@ -1,3 +1,4 @@
+<!-- markdownlint-disable -->
 # README
 ## **Multiprocessor System with Virtual Machine Firmware**
 ### main component:
@@ -22,25 +23,37 @@
 | Oscillator | `Active Crystal 16MHz`   | 1 |
 ********
 ### DST feature:
+
 * **Processor-IEE**(processor Isolated Execution Environment)
+
 * **VMF**(Virtual Machine Firmware on processor)
+
 -------------
+
 # Main Component
+
 ## 1. SMU (System Management Unit)
+
 The SMU is the unit responsible for overall system management, based on Arduino Mega 2560. It handles processor resets, memory programming, bus control, etc.
 
 ## 2. Processor 1
+
 Processor 1 is the first processor based on Atmega328P. It fetches and executes instructions from shared RAM, controlling data access through bus mastery.
 
 ## 3. Processor 2
+
 Processor 2 is the second processor based on Atmega328P. It alternates with Processor 1 to execute instructions using shared RAM.
 
 ## 4. DDU (Data Display Unit)
+
 The DDU is the data display unit, using Arduino Nano to display system status or outputs.
 
-------------------------------------
-------------------------------------
+********
+
+********
+
 # How it works
+
 - Processor1,2 `RESET Pin` LOW (`:rst` from SMU)
 - Load Binary(8bit) in RAM (`:w <bank number> from SMU`)
 - Processor1,2 `RESET Pin` HIGH (`:run` from SMU)
