@@ -107,6 +107,11 @@ If you don't have an active crystal, you can use this method. This section expla
    .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:w:0xE0:m
    ```
 
+   Set default:
+   ```powershell
+   .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:w:0xFF:m -U hfuse:w:0xDA:m -U efuse:w:0xFD:m
+   ```
+   
 # Usage
 1. Initialize the processors via SMU.
 2. Generate binaries using the code generator.
