@@ -111,7 +111,7 @@ If you don't have an active crystal, you can use this method. This section expla
    ```powershell
    .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:w:0xFF:m -U hfuse:w:0xDA:m -U efuse:w:0xFD:m
    ```
-   
+
 # Usage
 1. Initialize the processors via SMU.
 2. Generate binaries using the code generator.
@@ -128,5 +128,13 @@ The `examples/` folder contains simple ASM examples:
 # License
 This project is under the GNU General Public License v3.0 license. See the `LICENSE` file for details.
 
+Third-Party Credits:
+Modified ArduinoISP: This project includes a modified version of the ArduinoISP sketch.
+
+Original Author: Copyright (c) 2008-2011 Randall Bohn (BSD License).
+
+Modifications: include 8MHz clock output on D9.
+
+The original copyright notices are preserved in the source code as per the BSD license requirements.
 
 
