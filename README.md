@@ -1,6 +1,5 @@
 <!-- markdownlint-disable -->
-# README
-## **Multiprocessor System with Virtual Machine Firmware**
+# Multiprocessor System with Virtual Machine Firmware
 ### main component:
 * `Arduino Mega 2560(SMU)`
 * `shared RAM`
