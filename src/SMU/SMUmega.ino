@@ -101,14 +101,14 @@ void writeRAM(uint16_t addr, uint8_t data) {
     DDRA = 0xFF;
     PORTA = data;
     
-    PORTL &= ~(1 << 0);  // CE = 0
-    PORTB |=  (1 << 3);  // OE = 1
-    PORTB &= ~(1 << 2);  // WE = 0
+    RAM_CE_ENABLE();  // CE = 0
+    RAM_OE_DISABLE();  // OE = 1
+    RAM_WE_ENABLE();  // WE = 0
     
     asm volatile("nop\n\t nop\n\t");
     
-    PORTB |=  (1 << 2);  // WE = 1
-    PORTL |=  (1 << 0);  // CE = 1
+    RAM_WE_DISABLE();  // WE = 1
+    RAM_CE_DISABLE();  // CE = 1
     
     DDRA = 0x00;
     PORTA = 0x00;
