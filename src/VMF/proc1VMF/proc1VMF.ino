@@ -1,31 +1,25 @@
 /*
  * ============================================================================
- * Core 1 - Virtual Machine Firmware v5.0 (인터럽트 + 버스트 모드)
+ * Processor 1 - Virtual Machine Firmware v5.0 (interrupt + burst mode)
  * ============================================================================
- * 최적화:
- * - 인터럽트 기반 Core 2 완료 감지 (폴링 제거)
- * - 버스트 모드: 4개 명령어 연속 실행 (버스 전환 75% 감소)
- * - delay 완전 제거
- * - 예상 성능: 명령어당 4us (기존 70us 대비 17배 향상)
- * ============================================================================
-
+ *
  * 핀 배치:
- * - PD2~7, PB0~1: 데이터 버스 (D0~D7) → 74HC245 데이터버퍼#1
- * - PB2~5, PC0~2: 주소 버스 (A0~A6) → 74HC245 주소버퍼#1
- * - PD0: 74HC595-Core1 SER (Serial Data)
- * - PD1: 74HC595-Core1 SCK (Shift Clock)
- * - PC3: 74HC595-Core1 RCK (Latch Clock)
- * - PC4: Core Select (0=Core1 Active) + EEPROM A14
- * - PC5: Core 2 완료 신호 입력 (LOW=작업중, HIGH=완료)
+ * - PD2~7, PB0~1: 데이터 버스 (D0~D7) → 74HC245 데이터버퍼P1
+ * - PB2~5, PC0~2: 주소 버스 (A0~A6) → 74HC245 주소버퍼P1
+ * - PD0: 74HC595-Processor1 SER (Serial Data)
+ * - PD1: 74HC595-Processor1 SCK (Shift Clock)
+ * - PC3: 74HC595-Processor1 RCK (Latch Clock)
+ * - PC4: Processor Select (0=Processor1 Active) + EEPROM A14
+ * - PC5: Processor 2 완료 신호 입력 (LOW=작업중, HIGH=완료)
  * 
- * 페이징 시스템:
- * - 74HC595로 A7~A13 제어 (7비트)
+ * paging system:
+ * - 74HC595로 A7~A13 제어 (7bit)
  * - 128페이지 × 128바이트 = 16KB 접근 가능
  * - slot[15] = PAGE_REG (페이지 전용 레지스터)
  * 
- * 핸드셰이크:
- * - Core 2가 PC5로 완료 신호 전송
- * - Core 1은 PC5를 폴링하여 Core 2 완료 감지
+ * handshake:
+ * - Core 2(Processor 2): 작업 완료 시 PC5 신호를 전송 (High/Low)
+ * - Core 1(Processor 1): PC5 인터럽트(PCINT1)를 통해 Core 2의 완료 상태를 감지 및 동기화
  *
  * ------------------------------------------------------------
  *              0일때          1일때
@@ -74,7 +68,7 @@ volatile uint8_t current_page = 0;
 volatile bool halted = false;
 
 // 인터럽트 플래그
-volatile bool core2_ready = true;  // Core 2 완료 여부
+volatile bool core2_ready = true;  // Processor 2 완료 여부
 
 // Page Cache
 volatile uint8_t cached_page = 0xFF;
@@ -100,7 +94,7 @@ volatile uint8_t cached_page = 0xFF;
  * ============================================================================
  * 인터럽트 서비스 루틴 (ISR)
  * ============================================================================
- * PC5 핀 변화 감지 → Core 2 완료 신호
+ * PC5 핀 변화 감지 → Processor 2 완료 신호
  */
 ISR(PCINT1_vect) {
     if(IS_CORE2_DONE()) {
