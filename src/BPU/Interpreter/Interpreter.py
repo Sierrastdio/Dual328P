@@ -36,8 +36,7 @@ def parse_basic(line):
     BASIC 스타일 구문을 어셈블리 명령어로 변환
     """
     line = line.strip().upper()
-    if not line or line.startswith(';'):
-        return []
+    if not line or line.startswith(';') or line.startswith("'"): return []
     
     parts = line.split()
     cmd = parts[0]
