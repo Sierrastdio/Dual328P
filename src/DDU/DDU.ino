@@ -1,176 +1,116 @@
 /* 
  * ============================================================================
- * Arduino Nano #2 - GLCD Display Monitor with 74HC165
+ * Arduino Nano #2 - GLCD Display Monitor v3.0
  * ============================================================================
- * 
- * Role: Monitor address/data bus via 74HC165 and display on GLCD
- * 
- * Hardware Connections:
- * ---------------------
- * 74HC165 Chain (2 chips daisy-chained):
- *   74HC165 #1 (Data Bus D0~D7):
- *     D0~D7 -> 28C256 D0~D7 (parallel input)
- *     Q7 -> 74HC165 #2 DS (serial cascade)
- *   
- *   74HC165 #2 (Address Bus A0~A6):
- *     A0~A6 -> 28C256 A0~A6 (parallel input)
- *     A7 -> GND (unused)
- * 
- * Control Pins:
- *   A0 -> SH/LD (Shift/Load) - both chips
- *   A1 -> CLK (Clock) - both chips
- *   A2 -> DS (Serial Data from #2 Q7)
- *   
- * Core Output Detection:
- *   D2 -> 74HC138 Y1 (Core 1 Reg A)
- *   D3 -> 74HC138 Y4 (Core 2 Reg A)
- * 
- * GLCD ST7920 128x64 (Software SPI):
- *   D13 -> CLK
- *   D11 -> Data
- *   D10 -> CS
- *   D8  -> Reset
- * 
- * Display Layout:
- * ---------------
- * ┌────────────────────────┐
- * │ Dual-Core Monitor v2.0 │
- * ├────────────────────────┤
- * │ Core 1:                │
- * │   Addr: 0x1A           │
- * │   Data: 0x08 (8)       │
- * │                        │
- * │ Core 2:                │
- * │   Addr: 0x05           │
- * │   Data: 0x10 (16)      │
- * │                        │
- * │ Total: C1:42 C2:38     │
- * └────────────────────────┘
- * 
+ * 변경사항 (v2.0 → v3.0):
+ * - Core 신호 감지: 폴링 → 하드웨어 인터럽트 (INT0=D2, INT1=D3)
+ * - 74HC165 읽기: digitalRead → 직접 포트 접근 (속도 향상)
+ * - delay() 완전 제거 → millis() 기반 상태머신
+ * - Stats 화면 표시 중에도 신호 캡처 유지
  * ============================================================================
  */
 
 #include <U8g2lib.h>
 
-// ============================================================================
-// GLCD Setup (270° rotation, Software SPI)
-// ============================================================================
-// CLK=13, Data=11, CS=10, Reset=8
+// ── GLCD ─────────────────────────────────────────────────────────────────────
+// CLK=D13(PB5), Data=D11(PB3), CS=D10(PB2), Reset=D8(PB0)
 U8G2_ST7920_128X64_1_SW_SPI u8g2(U8G2_R3, 13, 11, 10, 8);
 
-// ============================================================================
-// Pin Definitions
-// ============================================================================
+// ── 74HC165 핀 (포트 직접 접근용) ────────────────────────────────────────────
+// A0 = PC0 (SH/LD), A1 = PC1 (CLK), A2 = PC2 (DATA)
+#define HC165_LOAD_LOW()   PORTC &= ~(1 << 0)
+#define HC165_LOAD_HIGH()  PORTC |=  (1 << 0)
+#define HC165_CLK_LOW()    PORTC &= ~(1 << 1)
+#define HC165_CLK_HIGH()   PORTC |=  (1 << 1)
+#define HC165_DATA_READ()  ((PINC >> 2) & 0x01)   // PC2
 
-// 74HC165 Control Pins
-const uint8_t HC165_LOAD = A0;   // SH/LD (Shift/Load, Active LOW)
-const uint8_t HC165_CLK  = A1;   // Clock
-const uint8_t HC165_DATA = A2;   // Serial Data Input (from #2 Q7)
+// ── 인터럽트 핀 ──────────────────────────────────────────────────────────────
+// D2 = INT0 (Core 1), D3 = INT1 (Core 2)
+const uint8_t CORE1_SIGNAL = 2;
+const uint8_t CORE2_SIGNAL = 3;
 
-// Core Output Detection
-const uint8_t CORE1_SIGNAL = 2;  // 74HC138 Y1 (Active LOW)
-const uint8_t CORE2_SIGNAL = 3;  // 74HC138 Y4 (Active LOW)
+// ── 인터럽트 공유 변수 ────────────────────────────────────────────────────────
+volatile bool core1_triggered = false;
+volatile bool core2_triggered = false;
 
-// ============================================================================
-// Display State
-// ============================================================================
-uint8_t last_core1_addr = 0;
-uint8_t last_core1_data = 0;
-uint8_t last_core2_addr = 0;
-uint8_t last_core2_data = 0;
+// ── 디스플레이 상태 ──────────────────────────────────────────────────────────
+uint8_t  last_core1_addr = 0, last_core1_data = 0;
+uint8_t  last_core2_addr = 0, last_core2_data = 0;
+uint32_t core1_count = 0, core2_count = 0;
 
-uint16_t core1_count = 0;
-uint16_t core2_count = 0;
-
-unsigned long last_update = 0;
+bool system_running       = false;
 bool display_needs_update = false;
-bool system_running = false;
 
-// ============================================================================
-// 74HC165 Chain Reading (16-bit: 7-bit Address + 8-bit Data + 1 unused)
-// ============================================================================
+// Stats 화면 상태머신
+bool          stats_showing  = false;
+unsigned long stats_show_at  = 0;   // stats 보이기 시작한 시각
+const uint32_t STATS_DURATION = 3000;
+const uint32_t STATS_INTERVAL = 15000;
+unsigned long last_stats_time = 0;
 
-/**
- * Read 16-bit from daisy-chained 74HC165 chips
- * Returns: [15:9] = Address A0~A6, [7:0] = Data D0~D7
- */
+// 디스플레이 갱신 쓰로틀
+unsigned long last_display_update = 0;
+const uint32_t DISPLAY_THROTTLE = 200;   // ms
+
+// ── 인터럽트 핸들러 ──────────────────────────────────────────────────────────
+// FALLING: 74HC138 출력이 Active LOW이므로 LOW로 떨어질 때 캡처
+void ISR_core1() { core1_triggered = true; }
+void ISR_core2() { core2_triggered = true; }
+
+// ── 74HC165 체인 읽기 (포트 직접 접근) ───────────────────────────────────────
+// 체인 순서: #1(Data D0~D7) Q7 → #2(Addr A0~A6) DS → Q7 → Nano A2
+// 시프트 아웃 순서: #2 MSB 먼저, #1 MSB 나중
+// result[15:9] = A0~A6, result[7:0] = D0~D7
 uint16_t read74HC165Chain() {
     uint16_t result = 0;
-    
-    // 1. Load parallel data (Active LOW)
-    digitalWrite(HC165_LOAD, LOW);
-    delayMicroseconds(5);
-    digitalWrite(HC165_LOAD, HIGH);
-    delayMicroseconds(5);
-    
-    // 2. Shift out 16 bits
-    for(uint8_t i = 0; i < 16; i++) {
-        // Read bit
-        uint8_t bit = digitalRead(HC165_DATA);
-        result = (result << 1) | bit;
-        
-        // Clock pulse
-        digitalWrite(HC165_CLK, HIGH);
-        delayMicroseconds(2);
-        digitalWrite(HC165_CLK, LOW);
-        delayMicroseconds(2);
+
+    // 1. 병렬 로드 (Active LOW 펄스)
+    HC165_LOAD_LOW();
+    asm volatile("nop\n\t nop\n\t nop\n\t nop\n\t");  // ~250ns
+    HC165_LOAD_HIGH();
+    asm volatile("nop\n\t nop\n\t nop\n\t nop\n\t");
+
+    // 2. 16비트 시프트
+    for (uint8_t i = 0; i < 16; i++) {
+        result = (result << 1) | HC165_DATA_READ();
+        HC165_CLK_HIGH();
+        asm volatile("nop\n\t nop\n\t");
+        HC165_CLK_LOW();
+        asm volatile("nop\n\t nop\n\t");
     }
-    
+
     return result;
 }
 
-/**
- * Extract address from 16-bit chain data
- */
-uint8_t extractAddress(uint16_t chain_data) {
-    return (chain_data >> 9) & 0x7F;  // bits [15:9]
-}
+inline uint8_t extractAddress(uint16_t d) { return (d >> 9) & 0x7F; }
+inline uint8_t extractData   (uint16_t d) { return  d       & 0xFF; }
 
-/**
- * Extract data from 16-bit chain data
- */
-uint8_t extractData(uint16_t chain_data) {
-    return chain_data & 0xFF;  // bits [7:0]
-}
-
-// ============================================================================
-// GLCD Display Functions
-// ============================================================================
-
+// ── 디스플레이 함수 ──────────────────────────────────────────────────────────
 void drawDisplay() {
     u8g2.firstPage();
     do {
-        // Title bar
+        char buf[22];
+
         u8g2.setFont(u8g2_font_6x10_tf);
         u8g2.drawStr(0, 8, "Dual-Core Monitor");
         u8g2.drawHLine(0, 10, 128);
-        
-        // Core 1 Section
-        u8g2.setFont(u8g2_font_6x10_tf);
+
         u8g2.drawStr(0, 20, "Core 1:");
-        
         u8g2.setFont(u8g2_font_5x7_tf);
-        char buf[20];
-        
         sprintf(buf, "Addr: 0x%02X", last_core1_addr);
         u8g2.drawStr(8, 28, buf);
-        
         sprintf(buf, "Data: 0x%02X (%d)", last_core1_data, last_core1_data);
         u8g2.drawStr(8, 36, buf);
-        
-        // Core 2 Section
+
         u8g2.setFont(u8g2_font_6x10_tf);
         u8g2.drawStr(0, 46, "Core 2:");
-        
         u8g2.setFont(u8g2_font_5x7_tf);
-        
         sprintf(buf, "Addr: 0x%02X", last_core2_addr);
         u8g2.drawStr(8, 54, buf);
-        
         sprintf(buf, "Data: 0x%02X (%d)", last_core2_data, last_core2_data);
         u8g2.drawStr(8, 62, buf);
-        
-    } while(u8g2.nextPage());
+
+    } while (u8g2.nextPage());
 }
 
 void drawWelcome() {
@@ -178,29 +118,24 @@ void drawWelcome() {
     do {
         u8g2.setFont(u8g2_font_9x15_tf);
         u8g2.drawStr(10, 25, "Dual-Core");
-        u8g2.drawStr(8, 45, "System v2.0");
-    } while(u8g2.nextPage());
+        u8g2.drawStr(8, 45, "System v3.0");
+    } while (u8g2.nextPage());
 }
 
 void drawStats() {
     u8g2.firstPage();
     do {
+        char buf[20];
         u8g2.setFont(u8g2_font_9x15_tf);
         u8g2.drawStr(20, 15, "Statistics");
-        
         u8g2.setFont(u8g2_font_6x10_tf);
-        char buf[30];
-        
-        sprintf(buf, "Total: %d", core1_count + core2_count);
+        sprintf(buf, "Total: %lu", core1_count + core2_count);
         u8g2.drawStr(10, 35, buf);
-        
-        sprintf(buf, "Core 1: %d", core1_count);
+        sprintf(buf, "Core 1: %lu", core1_count);
         u8g2.drawStr(10, 48, buf);
-        
-        sprintf(buf, "Core 2: %d", core2_count);
+        sprintf(buf, "Core 2: %lu", core2_count);
         u8g2.drawStr(10, 61, buf);
-        
-    } while(u8g2.nextPage());
+    } while (u8g2.nextPage());
 }
 
 void drawIdleScreen() {
@@ -209,110 +144,97 @@ void drawIdleScreen() {
         u8g2.setFont(u8g2_font_6x10_tf);
         u8g2.drawStr(15, 30, "Waiting for");
         u8g2.drawStr(10, 45, "Program Start...");
-    } while(u8g2.nextPage());
+    } while (u8g2.nextPage());
 }
 
-// ============================================================================
-// Core Monitoring
-// ============================================================================
-
-void monitorCores() {
-    bool updated = false;
-    
-    // Check Core 1 output (Y1 Active LOW)
-    if(digitalRead(CORE1_SIGNAL) == LOW) {
-        // Read bus data via 74HC165 chain
-        uint16_t bus_data = read74HC165Chain();
-        
-        last_core1_addr = extractAddress(bus_data);
-        last_core1_data = extractData(bus_data);
-        core1_count++;
-        updated = true;
-        system_running = true;
-        
-        delay(10);  // Debounce
-    }
-    
-    // Check Core 2 output (Y4 Active LOW)
-    if(digitalRead(CORE2_SIGNAL) == LOW) {
-        // Read bus data via 74HC165 chain
-        uint16_t bus_data = read74HC165Chain();
-        
-        last_core2_addr = extractAddress(bus_data);
-        last_core2_data = extractData(bus_data);
-        core2_count++;
-        updated = true;
-        system_running = true;
-        
-        delay(10);  // Debounce
-    }
-    
-    if(updated) {
-        display_needs_update = true;
-    }
-}
-
-// ============================================================================
-// Setup & Loop
-// ============================================================================
-
+// ── setup ────────────────────────────────────────────────────────────────────
 void setup() {
-    // Initialize GLCD
-    u8g2.begin();
-    u8g2.setContrast(128);  // Adjust as needed (0-255)
-    
-    // Configure 74HC165 control pins
-    pinMode(HC165_LOAD, OUTPUT);
-    pinMode(HC165_CLK, OUTPUT);
-    pinMode(HC165_DATA, INPUT);
-    
-    digitalWrite(HC165_LOAD, HIGH);  // Idle state
-    digitalWrite(HC165_CLK, LOW);    // Idle state
-    
-    // Configure core signal pins as INPUT with pull-up
+    // 74HC165 핀 설정 (포트 직접)
+    DDRC  |=  (1 << 0) | (1 << 1);   // A0(LOAD), A1(CLK) → 출력
+    DDRC  &= ~(1 << 2);               // A2(DATA) → 입력
+    PORTC &= ~(1 << 2);               // 풀업 없음
+
+    HC165_LOAD_HIGH();
+    HC165_CLK_LOW();
+
+    // Core 신호 핀: 입력 풀업 + 하드웨어 인터럽트
     pinMode(CORE1_SIGNAL, INPUT_PULLUP);
     pinMode(CORE2_SIGNAL, INPUT_PULLUP);
-    
-    // Show welcome message
+    attachInterrupt(digitalPinToInterrupt(CORE1_SIGNAL), ISR_core1, FALLING);
+    attachInterrupt(digitalPinToInterrupt(CORE2_SIGNAL), ISR_core2, FALLING);
+
+    u8g2.begin();
+    u8g2.setContrast(128);
+
     drawWelcome();
-    delay(2000);
-    
-    // Initial display
+    // delay 대신 millis로 2초 대기하되 인터럽트는 계속 작동
+    unsigned long t = millis();
+    while (millis() - t < 2000);
+
     drawIdleScreen();
 }
 
+// ── loop ─────────────────────────────────────────────────────────────────────
 void loop() {
-    // Monitor core outputs
-    monitorCores();
-    
-    // Update display if needed (throttle to 200ms for GLCD)
-    if(display_needs_update && (millis() - last_update > 200)) {
-        if(system_running) {
-            drawDisplay();
-        } else {
-            drawIdleScreen();
-        }
-        display_needs_update = false;
-        last_update = millis();
+    unsigned long now = millis();
+
+    // ── 인터럽트 플래그 처리 ─────────────────────────────────────────────────
+    // 인터럽트가 발생한 시점의 버스 값을 읽음
+    // (신호가 아직 LOW인 동안 읽으므로 타이밍상 유효)
+    if (core1_triggered) {
+        core1_triggered = false;
+        uint16_t bus = read74HC165Chain();
+        last_core1_addr = extractAddress(bus);
+        last_core1_data = extractData(bus);
+        core1_count++;
+        system_running       = true;
+        display_needs_update = true;
     }
-    
-    // Periodic refresh even if no updates (every 500ms)
-    if(millis() - last_update > 500) {
-        if(system_running) {
-            drawDisplay();
-        }
-        last_update = millis();
+
+    if (core2_triggered) {
+        core2_triggered = false;
+        uint16_t bus = read74HC165Chain();
+        last_core2_addr = extractAddress(bus);
+        last_core2_data = extractData(bus);
+        core2_count++;
+        system_running       = true;
+        display_needs_update = true;
     }
-    
-    // Show stats every 15 seconds
-    static unsigned long last_stats = 0;
-    if(millis() - last_stats > 15000) {
-        if(core1_count + core2_count > 0) {
+
+    // ── Stats 상태머신 (delay 없이) ──────────────────────────────────────────
+    if (!stats_showing) {
+        // 15초마다, 출력 데이터가 있을 때만 Stats 표시
+        if ((now - last_stats_time > STATS_INTERVAL) &&
+            (core1_count + core2_count > 0)) {
             drawStats();
-            delay(3000);
-            display_needs_update = true;
+            stats_showing    = true;
+            stats_show_at    = now;
+            last_stats_time  = now;
         }
-        last_stats = millis();
+    } else {
+        // 3초 경과 → 일반 화면 복귀
+        if (now - stats_show_at > STATS_DURATION) {
+            stats_showing        = false;
+            display_needs_update = true;   // 즉시 메인 화면 재그림
+        }
+    }
+
+    // ── 디스플레이 갱신 (Stats 중에는 갱신 생략) ─────────────────────────────
+    if (!stats_showing) {
+        bool throttle_ok = (now - last_display_update > DISPLAY_THROTTLE);
+
+        if (display_needs_update && throttle_ok) {
+            if (system_running) drawDisplay();
+            else                drawIdleScreen();
+            display_needs_update = false;
+            last_display_update  = now;
+        }
+
+        // 500ms 주기 강제 갱신 (신호 없어도 화면 유지)
+        if (system_running && (now - last_display_update > 500)) {
+            drawDisplay();
+            last_display_update = now;
+        }
     }
 }
 
