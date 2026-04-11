@@ -3,18 +3,26 @@ import time
 import sys
 
 OPCODES = {
-    "NOP": 0x00, "LOAD": 0x10, "ADD": 0x20, "SUB": 0x30, "MUL": 0x40,
-    "AND": 0x50, "OR": 0x60, "OUT": 0x70, "FETCH": 0x80, "SLOT": 0x90,
-    "PUSH": 0xA0, "POP": 0xB0, "SETPAGE": 0xE0, "HALT": 0xF0
+    "NOP": 0x00, 
+    "LOAD": 0x10, 
+    "ADD": 0x20, 
+    "SUB": 0x30, 
+    "MUL": 0x40,
+    "AND": 0x50, 
+    "OR": 0x60, 
+    "OUT": 0x70, 
+    "FETCH": 0x80, 
+    "SLOT": 0x90,
+    "PUSH": 0xA0, 
+    "POP": 0xB0, 
+    "SETPAGE": 0xE0, 
+    "HALT": 0xF0
 }
 
 TEMP_SLOT = 14   # 연산용 임시 슬롯 (사용자에게 문서화 필요)
 PAGE_SLOT = 15   # SETPAGE용 예약 슬롯
 
 def get_const_asm(val):
-    """
-    레지스터 A만 사용하여 0~255 값 생성
-    """
     if val == 0:
         return ["LOAD 0"]
     if val <= 15:
@@ -32,16 +40,12 @@ def get_const_asm(val):
     return lines
 
 def parse_basic(line):
-    """
-    BASIC 스타일 구문을 어셈블리 명령어로 변환
-    """
     line = line.strip().upper()
     if not line or line.startswith(';') or line.startswith("'"): return []
     
     parts = line.split()
     cmd = parts[0]
 
-    # [대입] LET <slot> = <val>
     if cmd == "LET":
         if len(parts) >= 4:
             slot = int(parts[1])
@@ -51,7 +55,6 @@ def parse_basic(line):
             seq.append(f"SLOT {slot}")
             return seq
 
-    # [산술/논리] CMD <slot> <val>
     elif cmd in ["ADD", "SUB", "MUL", "AND", "OR"]:
         if len(parts) >= 3:
             slot = int(parts[1])
@@ -64,17 +67,14 @@ def parse_basic(line):
             seq.append(f"SLOT {slot}")
             return seq
 
-    # [입출력] PRINT <slot>
     elif cmd == "PRINT":
         if len(parts) >= 2:
             return [f"FETCH {parts[1]}", "OUT"]
 
-    # [시스템] PAGE <val>
     elif cmd == "PAGE":
         if len(parts) >= 2:
             return [f"LOAD {parts[1]}", f"SLOT {PAGE_SLOT}", "SETPAGE"]
 
-    # [직접 명령어]
     elif cmd in OPCODES:
         return [line]
 
@@ -85,7 +85,7 @@ def parse_basic(line):
 
 def compile_basic_file(filepath):
     binary = bytearray()
-    with open(filepath, 'r') as f:
+    with open(filepath, 'r', encoding='utf-8-sig') as f:  # ← 여기가 수정됨
         for lineno, line in enumerate(f, 1):
             asm_lines = parse_basic(line)
             for asm in asm_lines:
@@ -97,28 +97,23 @@ def compile_basic_file(filepath):
                 operand = int(parts[1]) & 0x0F if len(parts) > 1 else 0
                 binary.append(opcode | operand)
 
-    # 프로그램 끝에 HALT 자동 추가
     binary.append(OPCODES["HALT"])
     return binary
 
 def program_bpu(port, bank, page, binary_data):
     try:
         ser = serial.Serial(port, 115200, timeout=2)
-        time.sleep(2)  # 아두이노 리셋 대기
+        time.sleep(2)
 
-        # 헤더 전송
         cmd = f":wb {bank} {page} {len(binary_data)}\n"
         ser.write(cmd.encode())
         ser.flush()
 
-        # 아두이노가 명령 파싱할 시간 확보
         time.sleep(0.1)
 
-        # 바이너리 데이터 전송
         ser.write(binary_data)
         ser.flush()
 
-        # 완료 대기
         response = ser.readline().decode().strip()
         if response == "OK":
             print(f"[완료] Bank{bank} Page{page} 프로그래밍 성공")
