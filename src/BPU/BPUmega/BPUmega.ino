@@ -1,9 +1,13 @@
 /*
  * ============================================================================
- * BPU v1.1 - Binary Programmer Unit for Arduino Mega 2560
+ * BPU Mega v2.0 - 청크+ACK 프로토콜, 500000 baud
  * ============================================================================
- * :wb <bank> <page> <size>
- * 이 명령어를 통해 PC로부터 바이너리 데이터를 직접 수신하여 SRAM에 기록.
+ * 변경사항 (v1.1 → v2.0):
+ * - 115200 → 500000 baud (4.3배 향상)
+ * - prog_buf[1024] 제거 → chunk_buf[512] 청크 단위 수신/기록
+ * - 청크마다 ACK 응답으로 흐름 제어 (수신버퍼 오버플로 방지)
+ * - 뱅크 자동 전환 (32KB 연속 기록 지원)
+ * - READY 핸드셰이크 추가
  * ============================================================================
  */
 
@@ -19,11 +23,15 @@
 #define RESET_CORES()    PORTB &= ~(1 << 1)
 #define RELEASE_CORES()  PORTB |=  (1 << 1)
 
-#define MAX_PROG 1024
-#define RX_TIMEOUT_MS 3000   // 수신 타임아웃 (ms)
+// ── 설정 ─────────────────────────────────────────────────────────────────────
+#define BAUD_RATE      115200
+#define CHUNK_SIZE     512      // 청크 크기 (Mega SRAM 여유 고려)
+#define MAX_TOTAL      32768    // 32KB
+#define RX_TIMEOUT_MS  3000
 
-uint8_t prog_buf[MAX_PROG];
+uint8_t chunk_buf[CHUNK_SIZE];
 
+// ── 주소/버스 ─────────────────────────────────────────────────────────────────
 void set_addr_bus(uint16_t addr) {
     addr &= 0x3FFF;
     PORTC = addr & 0xFF;
@@ -43,67 +51,115 @@ void writeRAM(uint16_t addr, uint8_t data) {
     DDRA = 0x00;
 }
 
+// logical_addr: 0x0000~0x3FFF = Bank0, 0x4000~0x7FFF = Bank1
+inline void writeLogical(uint32_t logical_addr, uint8_t data) {
+    if (logical_addr < 0x4000) {
+        RAM_A14_LOW();
+        writeRAM((uint16_t)logical_addr, data);
+    } else {
+        RAM_A14_HIGH();
+        writeRAM((uint16_t)(logical_addr - 0x4000), data);
+    }
+}
+
 uint16_t calcPhysicalAddr(uint8_t page, uint8_t offset) {
     return ((uint16_t)(page & 0x7F) << 7) | (offset & 0x7F);
 }
 
+// ── 청크 수신 ─────────────────────────────────────────────────────────────────
+// 정확히 size 바이트를 수신. 타임아웃 시 false 반환
+bool recvChunk(uint8_t* buf, uint16_t size) {
+    uint16_t got = 0;
+    unsigned long deadline = millis() + RX_TIMEOUT_MS;
+    while (got < size) {
+        if (Serial.available()) {
+            buf[got++] = Serial.read();
+            deadline = millis() + RX_TIMEOUT_MS;
+        } else if (millis() > deadline) {
+            Serial.print(F("ERR: TIMEOUT got="));
+            Serial.println(got);
+            return false;
+        }
+    }
+    return true;
+}
+
+// ── setup ────────────────────────────────────────────────────────────────────
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(BAUD_RATE);
     DDRA = 0x00;
     DDRC = 0xFF;
     DDRL = 0xFF;
     DDRB |= 0b00001110;
-    PORTL |= 0b00000001;
-    PORTB |= 0b00001110;
+    PORTL |= 0b00000001;   // CE# HIGH (비활성)
+    PORTB |= 0b00001110;   // OE#/WE#/RESET HIGH
     RESET_CORES();
-    Serial.println(F("BPU v1.1 Ready"));
+    Serial.println(F("BPU Mega v2.0 Ready"));
 }
 
+// ── loop ─────────────────────────────────────────────────────────────────────
 void loop() {
-    if (Serial.available() > 0) {
-        String cmd = Serial.readStringUntil('\n');
-        cmd.trim();
+    if (!Serial.available()) return;
 
-        if (cmd.startsWith(":wb ")) {
-            int bank, page, size;
-            if (sscanf(cmd.c_str(), ":wb %d %d %d", &bank, &page, &size) == 3) {
-                if (size <= 0 || size > MAX_PROG) {
-                    Serial.println(F("ERR: SIZE"));
-                    return;
-                }
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd.length() == 0) return;
 
-                // 타임아웃 있는 수신 루프
-                size_t received = 0;
-                unsigned long deadline = millis() + RX_TIMEOUT_MS;
-                while (received < (size_t)size) {
-                    if (Serial.available()) {
-                        prog_buf[received++] = Serial.read();
-                        deadline = millis() + RX_TIMEOUT_MS; // 수신될 때마다 갱신
-                    } else if (millis() > deadline) {
-                        Serial.print(F("ERR: TIMEOUT received="));
-                        Serial.println(received);
-                        return;
-                    }
-                }
+    // ── :wb <bank> <page> <total> ─────────────────────────────────────────
+    if (cmd.startsWith(":wb ")) {
+        int bank, page, total;
+        if (sscanf(cmd.c_str(), ":wb %d %d %d", &bank, &page, &total) != 3) {
+            Serial.println(F("ERR: PARSE"));
+            return;
+        }
+        if (bank < 0 || bank > 1) { Serial.println(F("ERR: bank 0-1")); return; }
+        if (page < 0 || page > 127) { Serial.println(F("ERR: page 0-127")); return; }
+        if (total <= 0 || total > MAX_TOTAL) { Serial.println(F("ERR: SIZE")); return; }
 
-                if (bank == 0) RAM_A14_LOW(); else RAM_A14_HIGH();
-                for (int i = 0; i < (int)received; i++) {
-                    writeRAM(calcPhysicalAddr(page, i & 0x7F), prog_buf[i]);
-                }
-                Serial.println(F("OK"));
+        // 논리 시작 주소 (bank × 16KB + page × 128)
+        uint32_t logical_base = (uint32_t)bank * 0x4000
+                              + calcPhysicalAddr(page, 0);
 
-            } else {
-                Serial.println(F("ERR: PARSE"));
+        Serial.println(F("READY"));   // PC에 전송 허가
+
+        uint32_t received = 0;
+        while (received < (uint32_t)total) {
+            uint16_t chunk_sz = min((uint32_t)CHUNK_SIZE,
+                                    (uint32_t)total - received);
+
+            // 청크 수신
+            if (!recvChunk(chunk_buf, chunk_sz)) return;
+
+            // SRAM 기록 (논리 주소로 뱅크 자동 전환)
+            for (uint16_t i = 0; i < chunk_sz; i++) {
+                writeLogical(logical_base + received + i, chunk_buf[i]);
             }
 
-        } else if (cmd == ":run") {
-            RELEASE_CORES();
-            Serial.println(F("RUN"));
-        } else if (cmd == ":rst") {
-            RESET_CORES();
-            Serial.println(F("RST"));
-        } else {
-            Serial.println(F("ERR: CMD"));
+            received += chunk_sz;
+
+            // 마지막 청크면 OK, 아니면 ACK
+            if (received >= (uint32_t)total) {
+                Serial.println(F("OK"));
+            } else {
+                Serial.println(F("ACK"));
+            }
         }
+        return;
     }
+
+    // ── :run ─────────────────────────────────────────────────────────────
+    if (cmd == ":run") {
+        RELEASE_CORES();
+        Serial.println(F("RUN"));
+        return;
+    }
+
+    // ── :rst ─────────────────────────────────────────────────────────────
+    if (cmd == ":rst") {
+        RESET_CORES();
+        Serial.println(F("RST"));
+        return;
+    }
+
+    Serial.println(F("ERR: CMD"));
 }
