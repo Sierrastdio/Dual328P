@@ -1,3 +1,16 @@
+'''
+'============================================================================================================
+'   BPU ASSEMBLY & BASIC COMPILER
+'============================================================================================================
+'
+'   WARNING: THIS IS ONLY COMPATIBLE WITH 'BPU system' (BPUmega.ino)
+'   BECAUSE THIS CODE SENDS THE 'BINARY INSTRUCTION' DIRECTLY TO THE ARDUINO,
+'   THEREFORE ONLY THE BPU SYSTEM, WHICH RECEIVES THE 'BINARY INSTRUCTION' AND EXECUTES THEM, IS COMPATIBLE.
+'
+'
+'''
+
+
 import serial
 import time
 import sys
