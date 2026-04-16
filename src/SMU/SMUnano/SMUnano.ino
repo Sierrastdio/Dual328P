@@ -166,31 +166,19 @@ void writeRAM(uint16_t addr, uint8_t data) {
     set_data_output();
     write_data_bus(data);
     
-    ROM_CE_ENABLE();
-    ROM_OE_DISABLE();
-    ROM_WE_ENABLE();
+    RAM_CE_ENABLE();
+    RAM_OE_DISABLE();
+    RAM_WE_ENABLE();
     
     delayMicroseconds(1);  // SRAM 셋업 타임 (충분)
     
-    ROM_WE_DISABLE();
-    ROM_CE_DISABLE();
+    RAM_WE_DISABLE();
+    RAM_CE_DISABLE();
     
     // delay(10); ← 제거!
     set_data_input();
 }
-```
 
----
-
-## 변경 효과
-```
-EEPROM:
-:w 0 0 (128바이트) → 약 1.3초 (128 × 10ms)
-
-SRAM:
-:w 0 0 (128바이트) → 약 0.13초 (128 × 1ms)
-
-→ 10배 빠름!
 
 // ── 물리 주소 계산 ──────────────────────────────────────────────────────────
 uint16_t calcPhysicalAddr(uint8_t page, uint8_t offset) {

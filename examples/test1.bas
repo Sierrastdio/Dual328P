@@ -2,9 +2,8 @@
 ' 32(16*2), 16 순서로 출력
 
 LET 0 = 16
-LET 1 = 0
-MUL 1 2
+MUL 0 2    ' 슬롯0 = 16 * 2 = 32
 
-PRINT 1
-PRINT 0
+PRINT 0    ' 32 출력
+PRINT 0    ' (슬롯1은 안 씀)
 HALT

@@ -1,50 +1,16 @@
 /*
  * ============================================================================
- * BPU Nano v1.0 - Binary Programmer Unit for Arduino Nano/Uno
+ * BPU Nano v2.0 - READY/ACK 청크 프로토콜
  * ============================================================================
- * SMU Nano v5.0과 동일한 핀 배치 사용 (74HC595 주소 버스)
- *
- * 핀 배치:
- * - D2~D7, A0~A1: 데이터 버스 (D0~D7)
- * - D9:  SCK (74HC595-SMU1, SMU2)
- * - D10: RCK (74HC595-SMU1, SMU2)
- * - D11: SER (74HC595-SMU1)
- * - D12: RAM OE
- * - D13: RAM WE
- * - A2:  System RESET (Core 1, 2)
- * - A3:  74HC595 G# (Output Enable)
- * - A4:  62256 CE#
- * - A5:  62256 A14 (Bank Select)
- *
- * 프로토콜:
- *   :wb <bank> <page> <size>\n  → 이후 <size>바이트 바이너리 수신 → "OK"
- *   :run                        → Core 해제 → "RUN"
- *   :rst                        → Core 리셋 → "RST"
+ * 변경사항 (v1.0 → v2.0):
+ * - READY/ACK 핸드셰이크 프로토콜 추가 (컴파일러 v2.0 호환)
+ * - prog_buf 제거 → chunk_buf[64]로 교체 (Uno SRAM 2KB 고려)
+ * - 청크 단위 수신 즉시 SRAM 기록
  * ============================================================================
  */
 
 #include <avr/io.h>
 
-// ── 핀 정의 ──────────────────────────────────────────────────────────────────
-const uint8_t HC595_SER = 11;   // PB3
-const uint8_t HC595_SCK = 9;    // PB1
-const uint8_t HC595_RCK = 10;   // PB2
-const uint8_t HC595_G   = A3;   // PC3
-
-const uint8_t RAM_CE  = A4;     // PC4
-const uint8_t RAM_OE  = 12;     // PB4
-const uint8_t RAM_WE  = 13;     // PB5
-const uint8_t RAM_A14 = A5;     // PC5
-
-const uint8_t SYS_RESET = A2;   // PC2
-
-// ── 설정 ─────────────────────────────────────────────────────────────────────
-#define MAX_PROG      256
-#define RX_TIMEOUT_MS 3000
-
-uint8_t prog_buf[MAX_PROG];
-
-// ── 매크로 ───────────────────────────────────────────────────────────────────
 #define HC595_G_ENABLE()    PORTC &= ~(1 << 3)
 #define HC595_G_DISABLE()   PORTC |=  (1 << 3)
 #define HC595_RCK_LOW()     PORTB &= ~(1 << 2)
@@ -62,9 +28,34 @@ uint8_t prog_buf[MAX_PROG];
 #define RAM_WE_DISABLE()    PORTB |=  (1 << 5)
 #define RAM_A14_LOW()       PORTC &= ~(1 << 5)
 #define RAM_A14_HIGH()      PORTC |=  (1 << 5)
-
 #define RESET_CORES()       PORTC &= ~(1 << 2)
 #define RELEASE_CORES()     PORTC |=  (1 << 2)
+
+#define CHUNK_SIZE     64     // Uno SRAM(2KB) 고려한 청크 크기
+#define MAX_TOTAL      16384  // Nano/Uno는 Bank 하나(16KB)까지
+#define RX_TIMEOUT_MS  3000
+
+uint8_t chunk_buf[CHUNK_SIZE];
+
+// ── 74HC595 / 주소 버스 ───────────────────────────────────────────────────────
+void shiftOut_fast(uint8_t data) {
+    for (uint8_t i = 0; i < 8; i++) {
+        if (data & 0x80) HC595_SER_HIGH(); else HC595_SER_LOW();
+        HC595_SCK_HIGH();
+        HC595_SCK_LOW();
+        data <<= 1;
+    }
+}
+
+void setAddr(uint16_t addr) {
+    addr &= 0x3FFF;
+    HC595_RCK_LOW();
+    shiftOut_fast(((addr >> 8) & 0x3F) << 1);
+    shiftOut_fast(addr & 0xFF);
+    HC595_RCK_HIGH();
+    asm volatile("nop\n\t");
+    HC595_RCK_LOW();
+}
 
 // ── 데이터 버스 ──────────────────────────────────────────────────────────────
 inline void set_data_output() {
@@ -85,76 +76,62 @@ inline void write_data_bus(uint8_t data) {
     PORTC = (PORTC & ~0b00000011) | (data >> 6);
 }
 
-// ── 74HC595 시리얼 전송 ──────────────────────────────────────────────────────
-void shiftOut_fast(uint8_t data) {
-    for (uint8_t i = 0; i < 8; i++) {
-        if (data & 0x80) HC595_SER_HIGH(); else HC595_SER_LOW();
-        HC595_SCK_HIGH();
-        HC595_SCK_LOW();
-        data <<= 1;
-    }
-}
-
-// ── 주소 설정 ────────────────────────────────────────────────────────────────
-// SMU1: A0~A7 (QA~QH), SMU2: A8~A13 (QB~QG)
-void setAddr(uint16_t addr) {
-    addr &= 0x3FFF;
-    HC595_RCK_LOW();
-    shiftOut_fast(((addr >> 8) & 0x3F) << 1);  // → SMU2 (A8~A13)
-    shiftOut_fast(addr & 0xFF);                  // → SMU1 (A0~A7)
-    HC595_RCK_HIGH();
-    asm volatile("nop\n\t");
-    HC595_RCK_LOW();
-}
-
-// ── 물리 주소 계산 ───────────────────────────────────────────────────────────
-uint16_t calcPhysicalAddr(uint8_t page, uint8_t offset) {
-    return ((uint16_t)(page & 0x7F) << 7) | (offset & 0x7F);
-}
-
 // ── RAM 쓰기 ─────────────────────────────────────────────────────────────────
 void writeRAM(uint16_t addr, uint8_t data) {
     HC595_G_ENABLE();
     setAddr(addr);
-
     set_data_output();
     write_data_bus(data);
-
     RAM_CE_ENABLE();
     RAM_OE_DISABLE();
     RAM_WE_ENABLE();
-
     delayMicroseconds(1);
-
     RAM_WE_DISABLE();
     RAM_CE_DISABLE();
-
     set_data_input();
+}
+
+uint16_t calcPhysicalAddr(uint8_t page, uint8_t offset) {
+    return ((uint16_t)(page & 0x7F) << 7) | (offset & 0x7F);
+}
+
+// ── 청크 수신 ─────────────────────────────────────────────────────────────────
+bool recvChunk(uint8_t* buf, uint16_t size) {
+    uint16_t got = 0;
+    unsigned long deadline = millis() + RX_TIMEOUT_MS;
+    while (got < size) {
+        if (Serial.available()) {
+            buf[got++] = Serial.read();
+            deadline = millis() + RX_TIMEOUT_MS;
+        } else if (millis() > deadline) {
+            Serial.print(F("ERR: TIMEOUT got="));
+            Serial.println(got);
+            return false;
+        }
+    }
+    return true;
 }
 
 // ── setup ────────────────────────────────────────────────────────────────────
 void setup() {
     Serial.begin(115200);
 
-    // 출력 핀 설정
-    DDRB |= 0b00001110;   // D9(SCK), D10(RCK), D11(SER)
-    DDRB |= 0b00110000;   // D12(OE), D13(WE)
-    DDRC |= 0b00000100;   // A2(RESET)
-    DDRC |= 0b00001000;   // A3(595 G#)
-    DDRC |= 0b00010000;   // A4(CE#)
-    DDRC |= 0b00100000;   // A5(A14)
+    DDRB |= 0b00001110;
+    DDRB |= 0b00110000;
+    DDRC |= 0b00000100;
+    DDRC |= 0b00001000;
+    DDRC |= 0b00010000;
+    DDRC |= 0b00100000;
 
     set_data_input();
-
     HC595_G_DISABLE();
     RAM_CE_DISABLE();
     RAM_OE_DISABLE();
     RAM_WE_DISABLE();
     RAM_A14_LOW();
-
     RESET_CORES();
 
-    Serial.println(F("BPU Nano v1.0 Ready"));
+    Serial.println(F("BPU Nano v2.0 Ready"));
 }
 
 // ── loop ─────────────────────────────────────────────────────────────────────
@@ -165,51 +142,45 @@ void loop() {
     cmd.trim();
     if (cmd.length() == 0) return;
 
-    // ── :wb <bank> <page> <size> ─────────────────────────────────────────
+    // ── :wb <bank> <page> <total> ─────────────────────────────────────────
     if (cmd.startsWith(":wb ")) {
-        int bank, page, size;
-        if (sscanf(cmd.c_str(), ":wb %d %d %d", &bank, &page, &size) != 3) {
-            Serial.println(F("ERR: PARSE"));
-            return;
+        int bank, page, total;
+        if (sscanf(cmd.c_str(), ":wb %d %d %d", &bank, &page, &total) != 3) {
+            Serial.println(F("ERR: PARSE")); return;
         }
-        if (bank < 0 || bank > 1) {
-            Serial.println(F("ERR: bank 0-1"));
-            return;
-        }
-        if (page < 0 || page > 127) {
-            Serial.println(F("ERR: page 0-127"));
-            return;
-        }
-        if (size <= 0 || size > MAX_PROG) {
-            Serial.println(F("ERR: SIZE"));
-            return;
-        }
+        if (bank < 0 || bank > 1)   { Serial.println(F("ERR: bank 0-1")); return; }
+        if (page < 0 || page > 127) { Serial.println(F("ERR: page 0-127")); return; }
+        if (total <= 0 || total > MAX_TOTAL) { Serial.println(F("ERR: SIZE")); return; }
 
-        // 바이너리 수신
-        size_t received = 0;
-        unsigned long deadline = millis() + RX_TIMEOUT_MS;
-        while (received < (size_t)size) {
-            if (Serial.available()) {
-                prog_buf[received++] = Serial.read();
-                deadline = millis() + RX_TIMEOUT_MS;
-            } else if (millis() > deadline) {
-                Serial.print(F("ERR: TIMEOUT received="));
-                Serial.println(received);
-                return;
+        if (bank == 0) RAM_A14_LOW(); else RAM_A14_HIGH();
+
+        Serial.println(F("READY"));   // ← 핸드셰이크
+
+        uint32_t received = 0;
+        while (received < (uint32_t)total) {
+            uint16_t chunk_sz = min((uint32_t)CHUNK_SIZE,
+                                    (uint32_t)total - received);
+
+            if (!recvChunk(chunk_buf, chunk_sz)) return;
+
+            for (uint16_t i = 0; i < chunk_sz; i++) {
+                uint32_t offset = received + i;
+                uint8_t  pg     = page + (offset >> 7);
+                uint8_t  off    = offset & 0x7F;
+                writeRAM(calcPhysicalAddr(pg, off), chunk_buf[i]);
+            }
+
+            received += chunk_sz;
+
+            if (received >= (uint32_t)total) {
+                Serial.println(F("OK"));
+            } else {
+                Serial.println(F("ACK"));   // ← 다음 청크 요청
             }
         }
-
-        // SRAM 기록
-        if (bank == 0) RAM_A14_LOW(); else RAM_A14_HIGH();
-        for (int i = 0; i < (int)received; i++) {
-            writeRAM(calcPhysicalAddr(page, i & 0x7F), prog_buf[i]);
-        }
-
-        Serial.println(F("OK"));
         return;
     }
 
-    // ── :run ─────────────────────────────────────────────────────────────
     if (cmd == ":run") {
         set_data_input();
         HC595_G_DISABLE();
@@ -221,7 +192,6 @@ void loop() {
         return;
     }
 
-    // ── :rst ─────────────────────────────────────────────────────────────
     if (cmd == ":rst") {
         RESET_CORES();
         Serial.println(F("RST"));

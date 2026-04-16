@@ -14,6 +14,8 @@
 import serial
 import time
 import sys
+print("START", flush=True)
+sys.stdout.reconfigure(line_buffering=True)
 
 OPCODES = {
     "NOP": 0x00, 
@@ -37,7 +39,7 @@ PAGE_SLOT = 15
 RESERVED_SLOTS = (TEMP_SLOT, PAGE_SLOT)
 
 BAUD_RATE  = 115200   # 115200
-CHUNK_SIZE = 512      # 청크 단위 (Mega SRAM 여유 고려)
+CHUNK_SIZE = 64      # Nano/Uno는 64, Mega는 512
 
 def get_const_asm(val):
     if val == 0:
@@ -110,6 +112,8 @@ def parse_basic(line):
             seq  = get_const_asm(val)
             seq += [f"SLOT {TEMP_SLOT}", f"FETCH {slot}", f"{cmd} {TEMP_SLOT}", f"SLOT {slot}"]
             return seq
+        elif cmd in OPCODES:   # ← BASIC 조건 불만족 시 raw 어셈블리로 폴백
+            return [line]
 
     elif cmd == "NOT":
         if len(parts) >= 2:
@@ -184,32 +188,24 @@ def compile_basic_file(filepath):
     return binary
 
 def program_bpu(port, bank, page, binary_data):
-    """
-    청크+ACK 프로토콜로 SRAM에 기록.
-    1. 헤더 전송 후 "READY" 대기
-    2. CHUNK_SIZE씩 나눠 전송, 각 청크마다 "ACK" 대기
-    3. 마지막 청크 후 "OK" 대기
-    """
     try:
         ser = serial.Serial(port, BAUD_RATE, timeout=5)
-        time.sleep(2)   # Mega 리셋 대기
+        time.sleep(2)
+        ser.reset_input_buffer()
 
         total = len(binary_data)
         print(f"전송 시작: {total} bytes, {BAUD_RATE} baud, 청크 {CHUNK_SIZE}B")
 
-        # ── 헤더 전송 ──────────────────────────────────────────────────────
         header = f":wb {bank} {page} {total}\n"
         ser.write(header.encode())
         ser.flush()
 
-        # READY 대기
         resp = ser.readline().decode().strip()
         if resp != "READY":
             print(f"[오류] READY 응답 없음: '{resp}'")
             ser.close()
             return
 
-        # ── 청크 전송 루프 ─────────────────────────────────────────────────
         sent = 0
         chunk_idx = 0
         while sent < total:
@@ -219,23 +215,20 @@ def program_bpu(port, bank, page, binary_data):
             sent += len(chunk)
             chunk_idx += 1
 
-            # 진행률 표시
             pct = sent * 100 // total
-            print(f"\r  청크 {chunk_idx}: {sent}/{total} bytes ({pct}%)", end="", flush=True)
+            print(f"  청크 {chunk_idx}: {sent}/{total} bytes ({pct}%)")  # \r 제거
 
-            # ACK 또는 OK 대기
             resp = ser.readline().decode().strip()
             if resp == "ACK":
                 continue
             elif resp == "OK":
-                print(f"\n[완료] Bank{bank} Page{page}~ 프로그래밍 성공 ({total} bytes)")
+                print(f"[완료] Bank{bank} Page{page} 프로그래밍 성공 ({total} bytes)")
                 break
             else:
-                print(f"\n[오류] 예상치 못한 응답: '{resp}' (sent={sent})")
+                print(f"[오류] 예상치 못한 응답: '{resp}' (sent={sent})")
                 break
         else:
-            # while이 break 없이 끝난 경우 (마지막 ACK가 OK여야 함)
-            print(f"\n[경고] 루프 종료 후 OK 미수신")
+            print("[경고] 루프 종료 후 OK 미수신")
 
         ser.close()
 
@@ -245,20 +238,12 @@ def program_bpu(port, bank, page, binary_data):
         print(f"[오류] {e}")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 5:
-        print("Usage: python3 Interpreter.py <file.bas> <port> <bank> <page>")
-        print(f"  슬롯 {TEMP_SLOT}: 연산용 임시 슬롯 (사용 금지)")
-        print(f"  슬롯 {PAGE_SLOT}: PAGE 명령 예약 슬롯 (사용 금지)")
-        sys.exit(1)
-
-    bas_file = sys.argv[1]
+    # 사용법: python bpu.py <파일경로> <포트> <뱅크> <페이지>
+    filepath = sys.argv[1]
     port     = sys.argv[2]
-    bank     = int(sys.argv[3])
-    page     = int(sys.argv[4])
+    bank     = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    page     = int(sys.argv[4]) if len(sys.argv) > 4 else 0
 
-    print(f"컴파일 중: {bas_file}")
-    binary = compile_basic_file(bas_file)
-    print(f"바이너리 크기: {len(binary)} bytes")
-    print(f"바이너리: {binary.hex(' ')}")
-
+    binary = compile_basic_file(filepath)
+    print("바이너리:", " ".join(f"{b:08b}" for b in binary))
     program_bpu(port, bank, page, binary)
