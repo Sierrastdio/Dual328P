@@ -3,7 +3,7 @@
 '   BPU ASSEMBLY & BASIC COMPILER
 '============================================================================================================
 '
-'   WARNING: THIS IS ONLY COMPATIBLE WITH 'BPU system' (BPUmega.ino)
+'   WARNING: THIS IS ONLY COMPATIBLE WITH 'BPU system' (BPUmega.ino, BPUnano.ino)
 '   BECAUSE THIS CODE SENDS THE 'BINARY INSTRUCTION' DIRECTLY TO THE ARDUINO,
 '   THEREFORE ONLY THE BPU SYSTEM, WHICH RECEIVES THE 'BINARY INSTRUCTION' AND EXECUTES THEM, IS COMPATIBLE.
 '
@@ -238,12 +238,14 @@ def program_bpu(port, bank, page, binary_data):
         print(f"[오류] {e}")
 
 if __name__ == "__main__":
-    # 사용법: python bpu.py <파일경로> <포트> <뱅크> <페이지>
-    filepath = sys.argv[1]
-    port     = sys.argv[2]
-    bank     = int(sys.argv[3]) if len(sys.argv) > 3 else 0
-    page     = int(sys.argv[4]) if len(sys.argv) > 4 else 0
+    # 사용법: python bpu.py <파일경로> <포트> <뱅크> <페이지> -b
+    filepath   = sys.argv[1]
+    port       = sys.argv[2]
+    bank       = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    page       = int(sys.argv[4]) if len(sys.argv) > 4 else 0
+    show_binary = "-b" in sys.argv
 
     binary = compile_basic_file(filepath)
-    print("바이너리:", " ".join(f"{b:08b}" for b in binary))
+    if show_binary:
+        print("바이너리:", " ".join(f"{b:08b}" for b in binary))
     program_bpu(port, bank, page, binary)
