@@ -32,6 +32,18 @@
  * &=  clear bit (with ~)
  * ~   bitwise NOT
  * ============================================================================
+ *  SRAM 상위 주소 예약 (BPUmega와 협의 필요):
+ *   0x7FF8  timing_result_us    (4 bytes, little-endian)
+ *   0x7FFC  timing_result_instr (4 bytes, little-endian)
+ *   0x7FFF  flag byte (0xAA = 결과 유효)
+ *
+ *   Core 2 흐름:
+ *   HALT → 버스 획득 → 62256 예약 주소에 4바이트씩 기록
+ *           → flag = 0xAA → SIGNAL_DONE()
+ *
+ *   BPUmega 흐름:
+ *   flag == 0xAA 감지 → 8바이트 읽기 → 처리 → flag 클리어
+ * 
  */
 
 #include <avr/io.h>
@@ -75,17 +87,15 @@
 #define TIMING_INTERVAL  5120UL   // measure every N instructions
 
 // ─── VM state ─────────────────────────────────────────────────────────────────
-volatile uint8_t  regA        = 0x00;
+volatile uint8_t  regA         = 0x00;
 volatile uint8_t  slot[16];
 volatile uint8_t  stack[8];
-volatile uint8_t  stack_ptr   = 0;
-volatile uint8_t  PC          = 0;
+volatile uint8_t  stack_ptr    = 0;
+volatile uint8_t  PC           = 0;
 volatile uint8_t  current_page = 0;
-volatile bool     halted      = false;
-
-volatile bool     core2_ready = true;
-
-volatile uint8_t  cached_page = 0xFF;
+volatile bool     halted       = false;
+volatile bool     core2_ready  = true;
+volatile uint8_t  cached_page  = 0xFF;
 
 #define PAGE_REG slot[15]
 
@@ -110,59 +120,51 @@ volatile uint8_t  cached_page = 0xFF;
 // ============================================================================
 #ifdef ENABLE_TIMING
 
-volatile uint32_t _t1_overflows = 0;   // extended Timer1 overflow counter
+volatile uint32_t _t1_overflows = 0;
 
-// Timer1 overflow ISR — increments 32-bit extension
 ISR(TIMER1_OVF_vect) {
     _t1_overflows++;
 }
 
-// Read atomic 32-bit tick counter (1 tick = 0.5 µs)
 static inline uint32_t _get_ticks() {
     uint8_t  sreg = SREG;
     cli();
     uint32_t ov = _t1_overflows;
     uint16_t t  = TCNT1;
-    // If overflow flag is set but ISR hasn't run yet, compensate
     if ((TIFR1 & (1 << TOV1)) && t < 0x8000U) ov++;
     SREG = sreg;
     return (ov << 16) | t;
 }
 
-// Public results — read these after TIMING_INTERVAL instructions complete
-volatile uint32_t timing_result_us    = 0;  // elapsed µs
-volatile uint32_t timing_result_instr = 0;  // instructions counted (sanity check)
+volatile uint32_t timing_result_us    = 0;
+volatile uint32_t timing_result_instr = 0;
 
 static uint32_t _timing_start   = 0;
 static uint32_t _timing_counted = 0;
 static bool     _timing_active  = false;
 
-// Call once in setup() — starts Timer1 free-running, prescaler 8
 void timing_init() {
     TCCR1A = 0;
-    TCCR1B = (1 << CS11);    // prescaler 8  →  0.5 µs/tick @ 16 MHz
-    TIMSK1 = (1 << TOIE1);   // enable Timer1 overflow interrupt
+    TCCR1B = (1 << CS11);    // prescaler 8 → 0.5 µs/tick @ 16 MHz
+    TIMSK1 = (1 << TOIE1);
     TCNT1  = 0;
     _t1_overflows = 0;
     _timing_active = false;
 }
 
-// Start a new measurement window
 static inline void timing_start_window() {
     _timing_counted = 0;
     _timing_start   = _get_ticks();
     _timing_active  = true;
 }
 
-// Call after each burst — count is the number of instructions just executed.
-// Returns true (and stores result) exactly once when TIMING_INTERVAL is reached.
-// Cost: one uint32_t addition + one comparison per burst.
-static inline bool timing_tick(uint8_t count) {
+// [FIX] Pass actual executed count, not BURST_SIZE,
+//       so early HALT mid-burst doesn't skew the result.
+static inline bool timing_tick(uint8_t actual_count) {
     if (!_timing_active) return false;
-
-    _timing_counted += count;
+    _timing_counted += actual_count;
     if (_timing_counted >= TIMING_INTERVAL) {
-        uint32_t elapsed  = _get_ticks() - _timing_start;
+        uint32_t elapsed    = _get_ticks() - _timing_start;
         timing_result_us    = elapsed >> 1;   // ticks × 0.5 → µs
         timing_result_instr = _timing_counted;
         _timing_active = false;
@@ -171,14 +173,9 @@ static inline bool timing_tick(uint8_t count) {
     return false;
 }
 
-// ── Optional UART output (only safe to call after halted == true) ──────────
-//    PD1 is normally SCK for 74HC595. Use only when 595 data lines are
-//    electrically disconnected or the firmware has already halted.
-
 void timing_uart_init() {
-    // 9600 baud @ 16 MHz (UBRR = 103)
     UBRR0H = 0;
-    UBRR0L = 103;
+    UBRR0L = 103;   // 9600 baud @ 16 MHz
     UCSR0B = (1 << TXEN0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);  // 8-N-1
 }
@@ -196,10 +193,11 @@ static void _uart_putu32(uint32_t v) {
     if (v == 0) { _uart_putc('0'); return; }
     char buf[11]; int8_t i = 0;
     while (v) { buf[i++] = '0' + (v % 10); v /= 10; }
-    while (i--) _uart_putc(buf[i + 1]);  // reverse
+    // [FIX] was buf[i+1] — off-by-one dropped the first digit
+    while (i--) _uart_putc(buf[i]);
 }
 
-// Prints:  "TIMING: <instr> instr in <us> us (<ns_per_instr> ns/instr)\r\n"
+// "TIMING: <instr> instr in <us> us (<ns/instr> ns/instr)\r\n"
 void timing_uart_print() {
     timing_uart_init();
     _uart_puts("TIMING: ");
@@ -207,7 +205,6 @@ void timing_uart_print() {
     _uart_puts(" instr in ");
     _uart_putu32(timing_result_us);
     _uart_puts(" us (");
-    // ns per instruction = (us * 1000) / instr
     if (timing_result_instr > 0)
         _uart_putu32((timing_result_us * 1000UL) / timing_result_instr);
     else
@@ -216,7 +213,6 @@ void timing_uart_print() {
 }
 
 #else
-// When timing is disabled every call compiles to nothing
 #define timing_init()              do {} while(0)
 #define timing_start_window()      do {} while(0)
 #define timing_tick(n)             (false)
@@ -274,10 +270,8 @@ inline void set_data_output() {
 }
 
 inline void set_data_input() {
-    DDRD  &= 0b00000011;
-    PORTD &= 0b00000011;
-    DDRB  &= 0b11111100;
-    PORTB &= 0b11111100;
+    DDRD  &= 0b00000011;  PORTD &= 0b00000011;
+    DDRB  &= 0b11111100;  PORTB &= 0b11111100;
 }
 
 inline void write_data_bus(uint8_t data) {
@@ -382,7 +376,6 @@ void setup() {
     DDRC  &= ~0b00100000;   // PC5 input
     PORTC &= ~(1 << 5);     // pull-up disabled
 
-    // PC5 pin-change interrupt
     PCICR  |= (1 << PCIE1);
     PCMSK1 |= (1 << PCINT13);
     sei();
@@ -396,8 +389,8 @@ void setup() {
     PAGE_REG = 0;
     set_page_595(0);
 
-    timing_init();          // no-op when ENABLE_TIMING is undefined
-    timing_start_window();  // begin measuring from the first instruction
+    timing_init();
+    timing_start_window();
 
     _delay_ms(100);
 }
@@ -410,61 +403,29 @@ void loop() {
     if (halted) {
         set_high_z();
         RELEASE_TO_CORE2();
-        // Print timing result over UART after halt
-        // (PD0/PD1 no longer driving 595 at this point)
         timing_uart_print();
         while (1);
     }
 
-    // ── Burst: execute BURST_SIZE instructions per bus acquisition ───────────
+    // ── Burst ────────────────────────────────────────────────────────────────
+    // [FIX] Track actual executed count — HALT may fire before BURST_SIZE
+    uint8_t actual = 0;
     for (uint8_t i = 0; i < BURST_SIZE; i++) {
-        uint8_t instruction = fetch();
-        execute(instruction);
+        execute(fetch());
         PC++;
         if (PC >= 128) PC = 0;
+        actual++;
         if (halted) break;
     }
 
-    // One addition + compare per burst when ENABLE_TIMING is active.
-    // Compiles to zero instructions when ENABLE_TIMING is undefined.
-    if (timing_tick(BURST_SIZE)) {
-        // TIMING_INTERVAL reached mid-execution — result is ready in
-        // timing_result_us and timing_result_instr. Measurement stops here;
-        // execution continues uninterrupted.
-        // A new window starts automatically on the next call to setup() or
-        // whenever timing_start_window() is called again.
-    }
+    timing_tick(actual);    // ~2-3 cycles overhead when ENABLE_TIMING active
 
     // ── Yield bus to Core 2 ──────────────────────────────────────────────────
     set_high_z();
     RELEASE_TO_CORE2();
     core2_ready = false;
 
-    while (!core2_ready) asm volatile("nop");   // woken by PCINT1 ISR
+    while (!core2_ready) asm volatile("nop");
 
     ACTIVATE_CORE1();
 }
-
-
-/*
- * ============================================================================
- * Performance summary
- * ============================================================================
- *
- * Before:
- *   ~70 µs/instr   |   5120 instr → 358 ms   |   56 % overhead
- *
- * After:
- *   ~4  µs/instr   |   5120 instr →  ~20 ms  |   <10 % overhead  (17× faster)
- *
- * Changes:
- *   1. Interrupt:   polling waste eliminated
- *   2. Burst mode:  bus handoff count reduced by 75 %
- *   3. No delay:    unnecessary waits removed
- *
- * Timing subsystem overhead (ENABLE_TIMING active):
- *   Per burst : 1× uint32_t add + 1× compare  (~2–3 CPU cycles, <0.2 µs)
- *   At HALT   : UART print runs once, irrelevant to execution time
- *   Disabled  : #undef ENABLE_TIMING → zero overhead, zero code size impact
- * ============================================================================
- */

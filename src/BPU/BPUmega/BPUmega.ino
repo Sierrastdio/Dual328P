@@ -29,6 +29,11 @@
 #define MAX_TOTAL      32768    // 32KB
 #define RX_TIMEOUT_MS  3000
 
+// ── 타이밍 결과 (Core 1/2에서 기록) ──────────────────────────────────────────
+#define TIMING_RESULT_US_ADDR    0x7FF8
+#define TIMING_RESULT_INSTR_ADDR 0x7FFC
+#define TIMING_FLAG_ADDR         0x7FFF
+
 uint8_t chunk_buf[CHUNK_SIZE];
 
 // ── 주소/버스 ─────────────────────────────────────────────────────────────────
@@ -51,6 +56,18 @@ void writeRAM(uint16_t addr, uint8_t data) {
     DDRA = 0x00;
 }
 
+uint8_t readRAM(uint16_t addr) {
+    set_addr_bus(addr);
+    DDRA = 0x00;
+    PORTA = 0x00;
+    RAM_CE_ENABLE();
+    RAM_OE_DISABLE();
+    asm volatile("nop\n\t nop\n\t");
+    uint8_t data = PINA;
+    RAM_CE_DISABLE();
+    return data;
+}
+
 // logical_addr: 0x0000~0x3FFF = Bank0, 0x4000~0x7FFF = Bank1
 inline void writeLogical(uint32_t logical_addr, uint8_t data) {
     if (logical_addr < 0x4000) {
@@ -59,6 +76,17 @@ inline void writeLogical(uint32_t logical_addr, uint8_t data) {
     } else {
         RAM_A14_HIGH();
         writeRAM((uint16_t)(logical_addr - 0x4000), data);
+    }
+}
+
+// logical_addr: 0x0000~0x3FFF = Bank0, 0x4000~0x7FFF = Bank1
+inline uint8_t readLogical(uint32_t logical_addr) {
+    if (logical_addr < 0x4000) {
+        RAM_A14_LOW();
+        return readRAM((uint16_t)logical_addr);
+    } else {
+        RAM_A14_HIGH();
+        return readRAM((uint16_t)(logical_addr - 0x4000));
     }
 }
 
@@ -160,6 +188,37 @@ void loop() {
         Serial.println(F("RST"));
         return;
     }
+    // ── :timing ──────────────────────────────────────────────────────
+    if (cmd == ":timing") {
+        // flag 확인 (0xAA = 유효한 결과)
+        uint8_t flag = readLogical(TIMING_FLAG_ADDR);
+        if (flag != 0xAA) {
+            Serial.println(F("ERR: No timing result"));
+            return;
+        }
 
+        // 4바이트씩 little-endian으로 읽기
+        uint32_t timing_us = 0, timing_instr = 0;
+        for (uint8_t i = 0; i < 4; i++) {
+            timing_us |= ((uint32_t)readLogical(TIMING_RESULT_US_ADDR + i) << (i * 8));
+            timing_instr |= ((uint32_t)readLogical(TIMING_RESULT_INSTR_ADDR + i) << (i * 8));
+        }
+
+        // 출력
+        Serial.print(F("TIMING: "));
+        Serial.print(timing_instr);
+        Serial.print(F(" instr in "));
+        Serial.print(timing_us);
+        Serial.print(F(" us ("));
+        if (timing_instr > 0)
+            Serial.print((timing_us * 1000UL) / timing_instr);
+        else
+            Serial.print(F("?"));
+        Serial.println(F(" ns/instr)"));
+
+        // flag 클리어
+        writeLogical(TIMING_FLAG_ADDR, 0x00);
+        return;
+    }
     Serial.println(F("ERR: CMD"));
 }
