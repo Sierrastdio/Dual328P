@@ -1,7 +1,7 @@
 <!-- markdownlint-disable -->
 # Multiprocessor System with Virtual Machine Firmware
 ### main component:
-* `Arduino Mega 2560(SMU)`
+* `Arduino Mega 2560(BPU)`
 * `shared RAM`
 * `Processor1`
 * `Processor2`
@@ -31,17 +31,17 @@
 
 # Main Component
 
-## 1. SMU (System Management Unit)
+## 1. BPU (Binary Programmer Unit)
 
-The SMU is the unit responsible for overall system management, based on Arduino Mega 2560. It handles processor resets, memory programming, bus control, etc.
+The `BPU` is based on `Arduino Mega 2560`. BPU receives binary and program(load) to RAM(`62256 SRAM`)
 
 ## 2. Processor 1
 
-Processor 1 is the first processor based on Atmega328P. It fetches and executes instructions from shared RAM, controlling data access through bus mastery.
+`Processor 1` is the first processor based on `Atmega328P`. It fetches and executes instructions from shared RAM, controlling data access through bus mastery.
 
 ## 3. Processor 2
 
-Processor 2 is the second processor based on Atmega328P. It alternates with Processor 1 to execute instructions using shared RAM.
+`Processor 2` is the second processor based on `Atmega328P`. It alternates with Processor 1 to execute instructions using shared RAM.
 
 ## 4. DDU (Data Display Unit)
 
@@ -53,9 +53,9 @@ The DDU is the data display unit, using Arduino Nano to display system status or
 
 # How it works
 
-- Processor1,2 `RESET Pin` LOW (`:rst` from SMU)
-- Load Binary(8bit) in RAM (`:w <bank number> from SMU`)
-- Processor1,2 `RESET Pin` HIGH (`:run` from SMU)
+- Processor1,2 `RESET Pin` LOW (`:rst` from `BPU`)
+- Load Binary(8bit) in RAM (`python compiler.py <filepath> <port> <bank> <page> -b`)
+- Processor1,2 `RESET Pin` HIGH (`:run` from `BPU`)
   - -> Processor starts.
 - 1. `Processor 1` Acquire `Bus Mastery`(`Processor 1 PC4` `HIGH`)
 - 2. `Processor 1` Read Data from `62256 RAM` and processing Instruction Fetch & Execute
@@ -115,7 +115,7 @@ If you don't have an active crystal, you can use this method(both methods need t
 # Usage
 1. Connect the BPU to the PC.
 2. Write code in your PC, compile to binary and send to BPU.
-3. BPU will Programming to RAM.
+3. BPU will load the binary to RAM.
 4. when you use `:run` to BPU, Processors will start to work.
 
 # Examples
