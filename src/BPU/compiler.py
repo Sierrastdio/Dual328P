@@ -163,6 +163,12 @@ def program_bpu(port, bank, page, binary_data):
         time.sleep(2)
         ser.reset_input_buffer()
 
+        # Reset cores before writing SRAM
+        ser.write(b":rst\n"); ser.flush()
+        resp = ser.readline().decode().strip()
+        if resp != "RST":
+            print(f"[warning] unexpected reset response: '{resp}', continuing anyway")
+
         total = len(binary_data)
         print(f"Transmission started: {total} bytes, {BAUD_RATE} baud, chunk {CHUNK_SIZE}B")
 

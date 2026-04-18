@@ -1,5 +1,6 @@
 #include <avr/io.h>
 #include <avr/interrupt.h>
+#include <avr/eeprom.h>
 #include <util/delay.h>
 
 // ─── Instruction Set ─────────────────────────────────────────────────────────
@@ -26,14 +27,23 @@
 //  Enable:  uncomment #define ENABLE_TIMING
 //  Disable: comment it out → zero runtime overhead
 //
-//  Timer1: prescaler 8 → 0.5 µs/tick @ 16 MHz, 32-bit via overflow ISR
-//
-//  !! UART OUTPUT WARNING !!
-//  PD0 (RX) = 74HC595 SER, PD1 (TX) = 74HC595 SCK.
-//  UART only safe after halted == true (595 no longer driven).
+//  Result flow:
+//    HALT → eeprom_update saves 9 bytes (~30 ms, after execution)
+//    Next power-on → setup() reads EEPROM, prints via UART (595 not yet driven)
+//    → flag cleared → normal execution begins
 //
 #define ENABLE_TIMING
 #define TIMING_INTERVAL  5120UL
+
+// ─── EEPROM layout (9 bytes total) ───────────────────────────────────────────
+//  Core 2 uses offset 0x10 to avoid collision with Core 1 (0x00~0x08)
+//  0x10~0x13 : timing_result_us    (uint32_t, little-endian)
+//  0x14~0x17 : timing_result_instr (uint32_t, little-endian)
+//  0x18      : flag  0xAA = valid data present
+#define EEPROM_ADDR_US    ((uint32_t*)0x10)
+#define EEPROM_ADDR_INSTR ((uint32_t*)0x14)
+#define EEPROM_ADDR_FLAG  ((uint8_t*) 0x18)
+#define EEPROM_FLAG_VALID 0xAA
 
 // ─── VM state ─────────────────────────────────────────────────────────────────
 volatile uint8_t regA         = 0x00;
@@ -104,7 +114,6 @@ static inline void timing_start_window() {
     _timing_active  = true;
 }
 
-// [FIX] actual_count instead of BURST_SIZE — correct when HALT fires mid-burst
 static inline bool timing_tick(uint8_t actual_count) {
     if (!_timing_active) return false;
     _timing_counted += actual_count;
@@ -118,9 +127,9 @@ static inline bool timing_tick(uint8_t actual_count) {
     return false;
 }
 
-void timing_uart_init() {
+static void _uart_init() {
     UBRR0H = 0;
-    UBRR0L = 103;   // 9600 baud @ 16 MHz
+    UBRR0L = 103;
     UCSR0B = (1 << TXEN0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
 }
@@ -141,25 +150,37 @@ static void _uart_putu32(uint32_t v) {
     while (i--) _uart_putc(buf[i]);
 }
 
-void timing_uart_print() {
-    timing_uart_init();
-    _uart_puts("TIMING: ");
-    _uart_putu32(timing_result_instr);
+void timing_save_eeprom() {
+    eeprom_update_dword(EEPROM_ADDR_US,    timing_result_us);
+    eeprom_update_dword(EEPROM_ADDR_INSTR, timing_result_instr);
+    eeprom_update_byte (EEPROM_ADDR_FLAG,  EEPROM_FLAG_VALID);
+}
+
+void timing_load_and_print_eeprom() {
+    if (eeprom_read_byte(EEPROM_ADDR_FLAG) != EEPROM_FLAG_VALID) return;
+
+    uint32_t us    = eeprom_read_dword(EEPROM_ADDR_US);
+    uint32_t instr = eeprom_read_dword(EEPROM_ADDR_INSTR);
+
+    _uart_init();
+    _uart_puts("[TIMING] ");
+    _uart_putu32(instr);
     _uart_puts(" instr in ");
-    _uart_putu32(timing_result_us);
+    _uart_putu32(us);
     _uart_puts(" us (");
-    if (timing_result_instr > 0)
-        _uart_putu32((timing_result_us * 1000UL) / timing_result_instr);
-    else
-        _uart_putc('?');
+    if (instr > 0) _uart_putu32((us * 1000UL) / instr);
+    else           _uart_putc('?');
     _uart_puts(" ns/instr)\r\n");
+
+    eeprom_update_byte(EEPROM_ADDR_FLAG, 0x00);
 }
 
 #else
-#define timing_init()              do {} while(0)
-#define timing_start_window()      do {} while(0)
-#define timing_tick(n)             (false)
-#define timing_uart_print()        do {} while(0)
+#define timing_init()                   do {} while(0)
+#define timing_start_window()           do {} while(0)
+#define timing_tick(n)                  (false)
+#define timing_save_eeprom()            do {} while(0)
+#define timing_load_and_print_eeprom()  do {} while(0)
 #endif  // ENABLE_TIMING
 // ============================================================================
 
@@ -313,7 +334,11 @@ void setup() {
     for (uint8_t i = 0; i < 16; i++) slot[i]  = 0;
     for (uint8_t i = 0; i < 8;  i++) stack[i] = 0;
     PAGE_REG = 0;
-    set_page_595(0);
+
+    // ★ 595가 구동되기 전 — UART 안전 구간 ★
+    timing_load_and_print_eeprom();
+
+    set_page_595(0);    // ← 여기서부터 595 구동 시작
 
     SIGNAL_DONE();   // initial state: ready
 
@@ -331,15 +356,12 @@ void loop() {
     if (halted) {
         set_high_z();
         SIGNAL_DONE();
-        timing_uart_print();
-        // [FIX] was `return` — caused timing_uart_print() to fire every loop.
-        //       Use while(1) to stop permanently after halt.
+        timing_save_eeprom();   // ~30 ms, 실행 종료 후라 측정값 오염 없음
         while (1);
     }
 
     SIGNAL_BUSY();
 
-    // [FIX] Track actual executed count — HALT may fire before BURST_SIZE
     uint8_t actual = 0;
     for (uint8_t i = 0; i < BURST_SIZE; i++) {
         execute(fetch());
