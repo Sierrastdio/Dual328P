@@ -71,7 +71,7 @@ If you don't have an active crystal, you can use this method(both methods need t
 
 2. In Arduino IDE, select File > Examples > 11.ArduinoISP > ArduinoISP and upload it to the Uno to be used as programmer.
 
-3. Connect the programmer Uno (A) and the target Nano (B) as per the table below:
+3. Connect the programmer Uno (A) and the target ex)Nano (B) as per the table below:
 
 | Programmer Uno (A) | Target Nano (B) |
 |--------------------|-----------------|
@@ -86,44 +86,42 @@ If you don't have an active crystal, you can use this method(both methods need t
 
 5. Windows Environment (PowerShell based)
 
-   Change to the avrdude directory:
+   `Change to the avrdude directory:`
    ```powershell
    cd "C:\Users\user\AppData\Local\Arduino15\packages\arduino\tools\avrdude\6.3.0-arduino17\bin"
    ```
 
-   Verify connection:
+   `Verify connection:`
    ```powershell
    .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -v
    ```
    Note: Ensure the COM port (COM3) and baud rate (19200) are consistent with your setup.
 
-   Set 16MHz CKOUT (Nano fuse manipulation):
+   `Set 16MHz CKOUT:`
    ```powershell
    .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:w:0xBF:m
    ```
 
-   Set clock read mode:
+   `Set clock read mode:`
    ```powershell
    .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:w:0xE0:m
    ```
 
-   Set default:
+   `Set default:`
    ```powershell
    .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:w:0xFF:m -U hfuse:w:0xDA:m -U efuse:w:0xFD:m
    ```
 
 # Usage
-1. Initialize the processors via SMU.
-2. Generate binaries using the code generator.
-3. Control the system through the user interface.
+1. Connect the BPU to the PC.
+2. Write code in your PC, compile to binary and send to BPU.
+3. BPU will Programming to RAM.
+4. when you use `:run` to BPU, Processors will start to work.
 
 # Examples
-The `examples/` folder contains simple ASM examples:
-- `test1.asm`: Basic test code
-- `test2.asm`: Advanced test code
+The `examples/` folder contains simple ASM, BASIC examples.
 
 # Contributing
-
 
 # License
 This project is under the GNU General Public License v3.0 license. See the `LICENSE` file for details.
