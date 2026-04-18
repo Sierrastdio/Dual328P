@@ -64,7 +64,8 @@ The DDU is the data display unit, using Arduino Nano to display system status or
 
 
 # Fuse Bit Configuration
-If you don't have an active crystal, you can use this method. This section explains how to configure fuse bits using only Arduino without a separate oscillator or active crystal to set up 16MHz generator and read mode.
+When you use `Active Crystal(Oscillator)`, You need to configure the Fuse Bits to **enable clock output** on `Processor 1` and `Processor 2`.
+If you don't have an active crystal, you can use this method(both methods need to configure fuse bits unless you use `Passive Crystal`.). This section explains how to configure fuse bits using only Arduino without a separate oscillator or active crystal to set up 16MHz generator and read mode.
 
 1. Connect the Uno (A, programmer) to the PC via USB.
 
