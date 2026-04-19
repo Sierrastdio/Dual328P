@@ -125,23 +125,27 @@ Overview of this repository (Arduino sketch folders follow the usual `FolderName
 ```
 Dual328P/
 ├── LICENSE
+|
 ├── PinManual.md
 ├── README.md
+|
 ├── .vscode/
 │   └── settings.json
-├── codeGenerator/
-│   ├── bech1.py
-│   └── bench2.py
+|
 ├── examples/
 │   ├── test1.asm
 │   ├── test1.bas
+|   |
 │   ├── test2.asm
-│   └── test2.bas
-├── Images/
-│   ├── 2026-4-1.HEIC
-│   └── 2026-4-6.HEIC
+│   ├── test2.bas
+|   |
+|   ├── bench32K.asm
+|   ├── bench16K.asm
+|   └── write_bench.py
+|
 ├── modifiedISP/
 │   └── modifiedISP.ino
+|
 └── src/
     ├── BPU/
     │   ├── compiler.py
@@ -149,17 +153,20 @@ Dual328P/
     │   │   └── BPUmega.ino
     │   └── BPUnano/
     │       └── BPUnano.ino
+    |
     ├── DDU/
     │   ├── DDU128x64/
     │   │   └── DDU128x64.ino
     │   └── DDU16x2/
     │       └── DDU16x2.ino
+    |
     ├── SMU/
     │   ├── SMUeditor.py
     │   ├── SMUmega/
     │   │   └── SMUmega.ino
     │   └── SMUnano/
     │       └── SMUnano.ino
+    |
     └── VMF/
         ├── proc1VMF/
         │   └── proc1VMF.ino
