@@ -40,7 +40,7 @@ PAGE_SLOT   = 15    # reserved: page register
 
 RESERVED_SLOTS = (TEMP_SLOT, PAGE_SLOT)
 BAUD_RATE      = 115200
-CHUNK_SIZE     = 64  # Nano/Uno: 64, Mega: 512
+CHUNK_SIZE     = 512  # Nano/Uno: 64, Mega: 512
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -178,6 +178,12 @@ def program_bpu(port, bank, page, binary_data):
         resp = ser.readline().decode().strip()
         if resp != "READY":
             print(f"[error] No READY response: '{resp}'")
+            if "SIZE" in resp:
+                print(
+                    f"  hint: upload size is {total} bytes — BPUnano max 16384; "
+                    "BPU Mega older sketches used 16-bit int for :wb total (32768 overflowed → ERR: SIZE); "
+                    "reflash BPUmega.ino from this repo if you need a full 32 KiB transfer."
+                )
             ser.close()
             return
 
@@ -210,7 +216,7 @@ def program_bpu(port, bank, page, binary_data):
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Usage: python bpu.py <filepath> <port> <bank> <page> -b
+    # Usage: python compiler.py <filepath> <port> <bank> <page> -b
     filepath    = sys.argv[1]
     port        = sys.argv[2]
     bank        = int(sys.argv[3]) if len(sys.argv) > 3 else 0

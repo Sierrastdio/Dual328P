@@ -187,25 +187,28 @@ void loop() {
 
     // ── :wb <bank> <page> <total> ─────────────────────────────────────────────
     if (cmd.startsWith(":wb ")) {
-        int bank, page, total;
-        if (sscanf(cmd.c_str(), ":wb %d %d %d", &bank, &page, &total) != 3) {
+        int bank, page;
+        // Use 32-bit type: on AVR, int is 16-bit; total==32768 would overflow %d and trip ERR: SIZE.
+        unsigned long total;
+        if (sscanf(cmd.c_str(), ":wb %d %d %lu", &bank, &page, &total) != 3) {
             Serial.println(F("ERR: PARSE")); return;
         }
         if (bank < 0 || bank > 1)            { Serial.println(F("ERR: bank 0-1")); return; }
         if (page < 0 || page > 127)          { Serial.println(F("ERR: page 0-127")); return; }
-        if (total <= 0 || total > MAX_TOTAL) { Serial.println(F("ERR: SIZE")); return; }
+        if (total == 0UL || total > (unsigned long)MAX_TOTAL) { Serial.println(F("ERR: SIZE")); return; }
 
         uint32_t logical_base = (uint32_t)bank * 0x4000 + calcPhysicalAddr(page, 0);
         Serial.println(F("READY"));
 
         uint32_t received = 0;
-        while (received < (uint32_t)total) {
-            uint16_t chunk_sz = min((uint32_t)CHUNK_SIZE, (uint32_t)total - received);
+        const uint32_t total_u = (uint32_t)total;
+        while (received < total_u) {
+            uint16_t chunk_sz = min((uint32_t)CHUNK_SIZE, total_u - received);
             if (!recvChunk(chunk_buf, chunk_sz)) return;
             for (uint16_t i = 0; i < chunk_sz; i++)
                 writeLogical(logical_base + received + i, chunk_buf[i]);
             received += chunk_sz;
-            Serial.println(received >= (uint32_t)total ? F("OK") : F("ACK"));
+            Serial.println(received >= total_u ? F("OK") : F("ACK"));
         }
         return;
     }

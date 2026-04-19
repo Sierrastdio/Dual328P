@@ -24,18 +24,7 @@
  * Timing read flow:
  * - HALT → timing data saved to internal EEPROM
  * - Next boot → setup() reads EEPROM and prints via UART before 595 is driven
- * - No extra pins, no ISP, no chip removal needed — just power cycle
  *
- * ------------------------------------------------------------
- *            0             1
- * DDRx    input mode    output mode
- * PORTx   LOW           HIGH
- * PINx    ignore        read pin state
- *
- * |=  set bit
- * <<  left shift
- * &=  clear bit (with ~)
- * ~   bitwise NOT
  * ============================================================================
  */
 
@@ -351,8 +340,8 @@ void execute(uint8_t instruction) {
         case OP_AND:    regA &= operand;                break;
         case OP_OR:     regA |= operand;                break;
         case OP_OUT:    output_register(regA);          break;
-        case OP_FETCH:  regA = slot[operand & 0x0F];   break;
-        case OP_SLOT:   slot[operand & 0x0F] = regA;   break;
+        case OP_FETCH:  regA = slot[operand & 0x0F];    break;
+        case OP_SLOT:   slot[operand & 0x0F] = regA;    break;
 
         case OP_PUSH:
             if (stack_ptr < 8) stack[stack_ptr++] = regA;

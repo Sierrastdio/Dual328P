@@ -1,3 +1,33 @@
+/*
+ * ============================================================================
+ * Processor 2 - Virtual Machine Firmware v6.0 (Timer added)
+ * ============================================================================
+ *
+ * Pin layout:
+ * - PD2~7, PB0~1: Data bus (D0~D7)  → 74HC245 data buffer P2
+ * - PB2~5, PC0~2: Address bus (A0~A6) → 74HC245 address buffer P2
+ * - PD0: 74HC595-Processor2 SER (Serial Data)   ← conflicts with UART RX
+ * - PD1: 74HC595-Processor2 SCK (Shift Clock)   ← conflicts with UART TX
+ * - PC3: 74HC595-Processor2 RCK (Latch Clock)
+ * - PC4: N/C
+ * - PC5: Handshake to Core 1 PC5 (output: LOW=busy, HIGH=done)
+ *
+ * Paging system:
+ * - 74HC595 controls A7~A13 (7 bits)
+ * - 128 pages × 128 bytes = 16 KB addressable
+ * - slot[15] = PAGE_REG (dedicated page register)
+ *
+ * Handshake:
+ * - Core 2 (Processor 2): drives PC5 — LOW while executing a burst, HIGH when ready for Core 1
+ * - Core 1 (Processor 1): detects Core 2 completion via PC5 interrupt (PCINT1)
+ *
+ * Timing read flow:
+ * - HALT → timing data saved to internal EEPROM
+ * - Next boot → setup() reads EEPROM and prints via UART before 595 is driven
+ *
+ * ============================================================================
+ */
+
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>

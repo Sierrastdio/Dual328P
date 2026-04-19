@@ -1,7 +1,7 @@
 <!-- markdownlint-disable -->
-# Multiprocessor System with Virtual Machine Firmware
+# Dual-processor System with Virtual Machine Firmware
 ### main component:
-* `Arduino Mega 2560(BPU)`
+* `Arduino Mega 2560`
 * `shared RAM`
 * `Processor1`
 * `Processor2`
@@ -57,9 +57,9 @@ The DDU is the data display unit, using Arduino Nano to display system status or
 - Load Binary(8bit) in RAM (`python compiler.py <filepath> <port> <bank> <page> -b`)
 - Processor1,2 `RESET Pin` HIGH (`:run` from `BPU`)
   - -> Processor starts.
-- 1. `Processor 1` Acquire `Bus Mastery`(`Processor 1 PC4` `HIGH`)
+- 1. `Processor 1` Acquire `Bus Mastery` (`Processor 1 PC4` `LOW`; also RAM `A14` on that net)
 - 2. `Processor 1` Read Data from `62256 RAM` and processing Instruction Fetch & Execute
-- 3. `Processor 1` release`Bus Mastery` to `Processor 2`(`Processor 1 PC4` `LOW`)
+- 3. `Processor 1` release `Bus Mastery` to `Processor 2` (`Processor 1 PC4` `HIGH`)
 - 4. `Processor 2` Read Data from `62256 RAM` and processing Instruction Fetch & Execute
 
 
@@ -73,7 +73,7 @@ If you don't have an active crystal, you can use this method(both methods need t
 
 3. Connect the programmer Uno (A) and the target ex)Nano (B) as per the table below:
 
-| Programmer Uno (A) | Target Nano (B) |
+| Programmer Uno (A) | Target (B) |
 |--------------------|-----------------|
 | D10               | RESET          |
 | D11               | D11            |
@@ -118,8 +118,54 @@ If you don't have an active crystal, you can use this method(both methods need t
 3. BPU will load the binary to RAM.
 4. when you use `:run` to BPU, Processors will start to work.
 
-# Examples
-The `examples/` folder contains simple ASM, BASIC examples.
+## Repository layout
+
+Overview of this repository (Arduino sketch folders follow the usual `FolderName/FolderName.ino` layout):
+
+```
+Dual328P/
+├── LICENSE
+├── PinManual.md
+├── README.md
+├── .vscode/
+│   └── settings.json
+├── codeGenerator/
+│   ├── bech1.py
+│   └── bench2.py
+├── examples/
+│   ├── test1.asm
+│   ├── test1.bas
+│   ├── test2.asm
+│   └── test2.bas
+├── Images/
+│   ├── 2026-4-1.HEIC
+│   └── 2026-4-6.HEIC
+├── modifiedISP/
+│   └── modifiedISP.ino
+└── src/
+    ├── BPU/
+    │   ├── compiler.py
+    │   ├── BPUmega/
+    │   │   └── BPUmega.ino
+    │   └── BPUnano/
+    │       └── BPUnano.ino
+    ├── DDU/
+    │   ├── DDU128x64/
+    │   │   └── DDU128x64.ino
+    │   └── DDU16x2/
+    │       └── DDU16x2.ino
+    ├── SMU/
+    │   ├── SMUeditor.py
+    │   ├── SMUmega/
+    │   │   └── SMUmega.ino
+    │   └── SMUnano/
+    │       └── SMUnano.ino
+    └── VMF/
+        ├── proc1VMF/
+        │   └── proc1VMF.ino
+        └── proc2VMF/
+            └── proc2VMF.ino
+```
 
 # Contributing
 
