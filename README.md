@@ -1,5 +1,5 @@
 <!-- markdownlint-disable -->
-# Dual-processor System with Virtual Machine Firmware
+# Dual-processor System with User defined ISA, Virtual Machine Firmware
 ### main component:
 * `Arduino Mega 2560`
 * `shared RAM`
