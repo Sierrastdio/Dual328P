@@ -11,9 +11,8 @@ PAGE_SIZE = 128
 PAGE_COUNT = 128
 TARGET_INSTR = PAGE_SIZE * PAGE_COUNT - 1  # compiler.py appends final HALT
 
-# In this VM, "single-core executable" is also 16 KiB.
-# (A14 bank switching is not part of instruction execution path.)
-SINGLE_INSTR = TARGET_INSTR
+# Requested single benchmark image size.
+SINGLE_INSTR = 32_768 - 1
 DUAL_INSTR = TARGET_INSTR
 
 
@@ -161,6 +160,17 @@ def build_paged_program(block: list[str], instruction_count: int) -> list[str]:
     return program[:instruction_count]
 
 
+def build_linear_program(parts: list[list[str]], instruction_count: int) -> list[str]:
+    program: list[str] = []
+    for part in parts:
+        program.extend(part)
+    if len(program) > instruction_count:
+        return program[:instruction_count]
+    while len(program) < instruction_count:
+        program.append("NOP")
+    return program
+
+
 def write_asm(path: pathlib.Path, header: str, program: list[str]) -> None:
     lines = [header, ""] + program + [""]
     with open(path, "w", encoding="utf-8", newline="\n") as f:
@@ -171,9 +181,8 @@ def write_asm(path: pathlib.Path, header: str, program: list[str]) -> None:
 def main() -> None:
     dual_0_program = build_paged_program(DUAL_0_BLOCK, DUAL_INSTR)
     dual_1_program = build_paged_program(DUAL_1_BLOCK, DUAL_INSTR)
-    # single-core uses a mixed block to resemble dual total opcode style.
-    mixed_block = DUAL_0_BLOCK + DUAL_1_BLOCK
-    single_program = build_paged_program(mixed_block, SINGLE_INSTR)
+    # single image is 32 KiB: bank0-style + bank1-style payload concatenated.
+    single_program = build_linear_program([dual_0_program, dual_1_program], SINGLE_INSTR)
 
     write_asm(
         ROOT / "dual_0.asm",
@@ -187,7 +196,7 @@ def main() -> None:
     )
     write_asm(
         ROOT / "single.asm",
-        "; single.asm - 16 KiB executable benchmark for single-core mode",
+        "; single.asm - 32 KiB benchmark payload for single-core comparison",
         single_program,
     )
 
