@@ -441,17 +441,6 @@ void loop() {
  * Performance summary
  * ============================================================================
  *
- * Before:
- *   ~70 µs/instr   |   5120 instr → 358 ms   |   56 % overhead
- *
- * After:
- *   ~4  µs/instr   |   5120 instr →  ~20 ms  |   <10 % overhead  (17× faster)
- *
- * Changes:
- *   1. Interrupt:   polling waste eliminated
- *   2. Burst mode:  bus handoff count reduced by 75 %
- *   3. No delay:    unnecessary waits removed
- *
  * Timing result read flow:
  *   Run → HALT → EEPROM save (9 bytes, ~30 ms)
  *   Power cycle → boot → UART print (595 not yet driven) → flag cleared

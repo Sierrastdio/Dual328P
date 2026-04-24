@@ -1,10 +1,10 @@
 <!-- markdownlint-disable -->
-# Dual-processor System with User defined ISA, Virtual Machine Firmware
+# Dual-processor System with User defined simple ISA, Virtual Machine Firmware
 ### main component:
 * `Arduino Mega 2560`
-* `shared RAM`
-* `Processor1`
-* `Processor2`
+* `shared SRAM`
+* `Processor1(ATmega328P)`
+* `Processor2(ATmega328P)`
 * `Arduino Nano(DDU)`
 
 ### parts list:
@@ -21,12 +21,6 @@
 | IC logic | `74HC165`     | 2 |
 | Oscillator | `Active Crystal 16MHz`   | 1 |
 ********
-### DST feature:
-
-* **Processor-IEE**(processor Isolated Execution Environment)
-
-* **VMF**(Virtual Machine Firmware on processor)
-
 -------------
 
 # Main Component
@@ -53,9 +47,17 @@ The DDU is the data display unit, using Arduino Nano to display system status or
 
 # How it works
 
-- Processor1,2 `RESET Pin` LOW (`:rst` from `BPU`)
-- Load Binary(8bit) in RAM (`python compiler.py <filepath> <port> <bank> <page> -b`)
-- Processor1,2 `RESET Pin` HIGH (`:run` from `BPU`)
+```
+  Your Computer: 
+        Code -> Compile -> Binary ->  Arduino Mega 2560(BPU) 
+
+  Arduino Mega 2560(BPU):
+        Binary -> Dual328P
+```
+
+- Processor1,2 `RESET Pin` LOW (use `:rst` on Serial Monitor)
+- Load Binary(8bit) in RAM (kill the Serial Monitor and `python compiler.py <filepath> <port> <bank> <page> -b`)
+- Processor1,2 `RESET Pin` HIGH (use `:run` on Serial Monitor)
   - -> Processor starts.
 - 1. `Processor 1` Acquire `Bus Mastery` (`Processor 1 PC4` `LOW`; also RAM `A14` on that net)
 - 2. `Processor 1` Read Data from `62256 RAM` and processing Instruction Fetch & Execute
@@ -84,7 +86,7 @@ If you don't have an active crystal, you can use this method(both methods need t
 
 4. Connect the computer and the programmer Arduino (A) with the upload cable.
 
-5. Windows Environment (PowerShell based)
+5. Windows Environment (PowerShell)
 
    `Change to the avrdude directory:`
    ```powershell
@@ -97,7 +99,7 @@ If you don't have an active crystal, you can use this method(both methods need t
    ```
    Note: Ensure the COM port (COM3) and baud rate (19200) are consistent with your setup.
 
-   `Set 16MHz CKOUT:`
+   `Set 16MHz clock out:`
    ```powershell
    .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:w:0xBF:m
    ```
@@ -125,27 +127,33 @@ Overview of this repository (Arduino sketch folders follow the usual `FolderName
 ```
 Dual328P/
 ├── LICENSE
-|
+│
 ├── PinManual.md
 ├── README.md
-|
+│
 ├── .vscode/
 │   └── settings.json
-|
+│
 ├── examples/
 │   ├── test1.asm
 │   ├── test1.bas
-|   |
+│   │
 │   ├── test2.asm
 │   ├── test2.bas
-|   |
-|   ├── bench32K.asm
-|   ├── bench16K.asm
-|   └── write_bench.py
-|
+│   │
+│   ├── bench32K.asm
+│   ├── bench16K.asm
+│   ├── write_bench.py
+│   │
+│   └── singleVSdual/
+│         ├── single.asm
+│         ├── dual_0.asm
+│         ├── dual_1.asm
+│         └── write_single_vs_dual_bench.py
+│
 ├── modifiedISP/
 │   └── modifiedISP.ino
-|
+│
 └── src/
     ├── BPU/
     │   ├── compiler.py
@@ -153,20 +161,20 @@ Dual328P/
     │   │   └── BPUmega.ino
     │   └── BPUnano/
     │       └── BPUnano.ino
-    |
+    │
     ├── DDU/
     │   ├── DDU128x64/
     │   │   └── DDU128x64.ino
     │   └── DDU16x2/
     │       └── DDU16x2.ino
-    |
+    │
     ├── SMU/
     │   ├── SMUeditor.py
     │   ├── SMUmega/
     │   │   └── SMUmega.ino
     │   └── SMUnano/
     │       └── SMUnano.ino
-    |
+    │
     └── VMF/
         ├── proc1VMF/
         │   └── proc1VMF.ino
@@ -174,18 +182,16 @@ Dual328P/
             └── proc2VMF.ino
 ```
 
-# Contributing
-
 # License
 This project is under the GNU General Public License v3.0 license. See the `LICENSE` file for details.
 
-Third-Party Credits:
-Modified ArduinoISP: This project includes a modified version of the ArduinoISP sketch.
+* Third-Party Credits:
+  Modified ArduinoISP: This project includes a modified version of the ArduinoISP sketch.
 
-Original Author: Copyright (c) 2008-2011 Randall Bohn (BSD License).
+  Original Author: Copyright (c) 2008-2011 Randall Bohn (BSD License).
 
-Modifications: include 8MHz clock output on D9.
+  Modifications: include 8MHz clock output on D9.
 
-The original copyright notices are preserved in the source code as per the BSD license requirements.
+  The original copyright notices are preserved in the source code as per the BSD license requirements.
 
 
