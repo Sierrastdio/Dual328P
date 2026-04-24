@@ -135,51 +135,54 @@ Dual328P/
 │   └── settings.json
 │
 ├── examples/
-│   ├── test1.asm
-│   ├── test1.bas
-│   │
-│   ├── test2.asm
-│   ├── test2.bas
-│   │
-│   ├── bench32K.asm
-│   ├── bench16K.asm
-│   ├── write_bench.py
-│   │
-│   └── singleVSdual/
-│         ├── single.asm
-│         ├── dual_0.asm
-│         ├── dual_1.asm
-│         └── write_single_vs_dual_bench.py
+│         ├── bench/
+│         │      ├── single.asm
+│         │      ├── dual_0.asm
+│         │      ├── dual_1.asm
+│         │      └── write_single_vs_dual_bench.py
+│         │
+│         │             
+│         ├── simple_examples/
+│         │       ├── test1.asm
+│         │       ├── test1.bas
+│         │       ├── test2.asm
+│         │       └── test2.bas
+│         │
+│         └── upload_test/
+│                 ├── bench32K.asm
+│                 ├── bench16K.asm
+│                 └── write_bench.py
+│ 
 │
 ├── modifiedISP/
 │   └── modifiedISP.ino
 │
 └── src/
-    ├── BPU/
-    │   ├── compiler.py
-    │   ├── BPUmega/
-    │   │   └── BPUmega.ino
-    │   └── BPUnano/
-    │       └── BPUnano.ino
-    │
-    ├── DDU/
-    │   ├── DDU128x64/
-    │   │   └── DDU128x64.ino
-    │   └── DDU16x2/
-    │       └── DDU16x2.ino
-    │
-    ├── SMU/
-    │   ├── SMUeditor.py
-    │   ├── SMUmega/
-    │   │   └── SMUmega.ino
-    │   └── SMUnano/
-    │       └── SMUnano.ino
-    │
-    └── VMF/
-        ├── proc1VMF/
-        │   └── proc1VMF.ino
-        └── proc2VMF/
-            └── proc2VMF.ino
+      ├── BPU/
+      │   ├── compiler.py
+      │   ├── BPUmega/
+      │   │   └── BPUmega.ino
+      │   └── BPUnano/
+      │       └── BPUnano.ino
+      │
+      ├── DDU/
+      │   ├── DDU128x64/
+      │   │   └── DDU128x64.ino
+      │   └── DDU16x2/
+      │       └── DDU16x2.ino
+      │
+      ├── SMU/
+      │   ├── SMUeditor.py
+      │   ├── SMUmega/
+      │   │   └── SMUmega.ino
+      │   └── SMUnano/
+      │       └── SMUnano.ino
+      │
+      └── VMF/
+          ├── proc1VMF/
+          │   └── proc1VMF.ino
+          └── proc2VMF/
+              └── proc2VMF.ino
 ```
 
 # License
