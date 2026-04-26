@@ -20,7 +20,7 @@
  * Mega filters by line-complete '\n' so partial noise bytes are discarded.
  * ============================================================================
  */
-
+#include <Arduino.h>
 #include <avr/io.h>
 
 // ─── RAM control ─────────────────────────────────────────────────────────────
