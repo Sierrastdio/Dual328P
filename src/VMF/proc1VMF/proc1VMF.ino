@@ -165,7 +165,7 @@ static inline bool timing_tick(uint8_t actual_count) {
 // ── UART (safe only before 595 is driven) ────────────────────────────────────
 static void _uart_init() {
     UBRR0H = 0;
-    UBRR0L = 103;   // 9600 baud @ 16 MHz
+    UBRR0L = 103;   // 9600 baud @ 16 MHz, must match with '#define CORE_BAUD 9600' in BPUmega.ino
     UCSR0B = (1 << TXEN0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
 }

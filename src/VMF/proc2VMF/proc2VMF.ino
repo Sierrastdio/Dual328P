@@ -159,7 +159,7 @@ static inline bool timing_tick(uint8_t actual_count) {
 
 static void _uart_init() {
     UBRR0H = 0;
-    UBRR0L = 103;
+    UBRR0L = 103;   // 9600 baud @ 16 MHz, must match with '#define CORE_BAUD 9600' in BPUmega.ino
     UCSR0B = (1 << TXEN0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
 }
@@ -322,8 +322,8 @@ void execute(uint8_t instruction) {
         case OP_AND:    regA &= operand;                break;
         case OP_OR:     regA |= operand;                break;
         case OP_OUT:    output_register(regA);          break;
-        case OP_FETCH:  regA = slot[operand & 0x0F];   break;
-        case OP_SLOT:   slot[operand & 0x0F] = regA;   break;
+        case OP_FETCH:  regA = slot[operand & 0x0F];    break;
+        case OP_SLOT:   slot[operand & 0x0F] = regA;    break;
 
         case OP_PUSH:
             if (stack_ptr < 8) stack[stack_ptr++] = regA;
