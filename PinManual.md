@@ -1,5 +1,5 @@
 <!-- markdownlint-disable -->
-# 8-bit Dual Core System - Complete Pin Connection Table (595 Paging)
+# ATmega328P Dual Processor System - Pin Connection Table
 
 ## 전원 연결
 
