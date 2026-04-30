@@ -90,7 +90,7 @@ If you don't have an active crystal, you can use this method(both methods need t
 
    `Change to the avrdude directory:`
    ```powershell
-   cd "C:\Users\user\AppData\Local\Arduino15\packages\arduino\tools\avrdude\6.3.0-arduino17\bin"
+   cd "C:\Users\user\AppData\Local\Arduino15\packages\arduino\tools\avrdude\8.0.0-arduino1\bin"
    ```
 
    `Verify connection:`
