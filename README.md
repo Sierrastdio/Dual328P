@@ -56,7 +56,7 @@ The DDU is the data display unit, using Arduino Nano to display system status or
 ```
 
 - Processor1,2 `RESET Pin` LOW (use `:rst` on Serial Monitor)
-- Load Binary(8bit) in RAM (kill the Serial Monitor and `python compiler.py <filepath> <port> <bank> <page> -b`)
+- Load Binary(8bit) in RAM (kill the Serial Monitor and `python src/BPU/compiler.py <filepath> <port> <bank> <page> -b`)
 - Processor1,2 `RESET Pin` HIGH (use `:run` on Serial Monitor)
   - -> Processor starts.
 - 1. `Processor 1` Acquire `Bus Mastery` (`Processor 1 PC4` `LOW`; also RAM `A14` on that net)
@@ -98,6 +98,12 @@ If you don't have an active crystal, you can use this method(both methods need t
    .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -v
    ```
    Note: Ensure the COM port (COM3) and baud rate (19200) are consistent with your setup.
+
+
+   `Show the FuseBit Set:`
+   ```powershell
+   .\avrdude.exe -C ..\etc\avrdude.conf -c avrisp -p m328p -P COM3 -b 19200 -U lfuse:r:-:h -U hfuse:r:-:h -U efuse:r:-:h
+   ```
 
    `Set 16MHz clock out:`
    ```powershell
