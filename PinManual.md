@@ -58,7 +58,7 @@
 | 11 | SCK | Core 1 PD1 (3번) |
 | 12 | RCK | Core 1 PC3 (26번) |
 | 9 | QH` | N/C |
-| 13 | G# | GND (항상 활성화) |
+| 13 | G#(OE) |  Proc1 소속 74HC245 OE |
 | 14 | SER | Core 1 PD0 (2번) |
 
 ---
@@ -160,7 +160,7 @@
 | 11 | SCK | Core 2 PD1 (3번) |
 | 12 | RCK | Core 2 PC3 (26번) |
 | 9 | QH` | N/C |
-| 13 | G# | GND (항상 활성화) |
+| 13 | G#(OE) | Proc2 소속 74HC245 OE |
 | 14 | SER | Core 2 PD0 (2번) |
 
 

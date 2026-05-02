@@ -431,6 +431,11 @@ void loop() {
         if (halted) break;
     }
 
+    // ★ HALT 없이도 인터벌 완료 시 즉시 저장 ★
+    if (timing_tick(actual)) {
+        timing_save_eeprom();
+    }
+
     timing_tick(actual);
 
     set_high_z();
