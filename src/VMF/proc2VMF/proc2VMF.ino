@@ -202,6 +202,12 @@ void timing_load_and_print_eeprom() {
     else           _uart_putc('?');
     _uart_puts(" ns/instr)\r\n");
 
+    // 전송 완전 완료 대기 후 UART 비활성화 ★
+    // TXC0: 마지막 비트까지 핀에서 전송 완료됨을 보장
+    // TXEN0 해제: PD1을 UART 하드웨어에서 GPIO로 반환 (595 SCK 사용 가능)
+    while (!(UCSR0A & (1 << TXC0)));
+    UCSR0B &= ~(1 << TXEN0);
+
     eeprom_update_byte(EEPROM_ADDR_FLAG, 0x00);
 }
 
