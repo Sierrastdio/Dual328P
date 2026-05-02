@@ -11,24 +11,25 @@
 import serial
 import time
 import sys
+import threading
 
 print("START", flush=True)
 sys.stdout.reconfigure(line_buffering=True)
 
 OPCODES = {
-    "NOP": 0x00, 
-    "LOAD": 0x10, 
-    "ADD":  0x20, 
-    "SUB": 0x30, 
-    "MUL": 0x40,
-    "AND": 0x50, 
-    "OR":   0x60, 
-    "OUT":  0x70, 
-    "FETCH": 0x80, 
+    "NOP": 0x00,
+    "LOAD": 0x10,
+    "ADD":  0x20,
+    "SUB":  0x30,
+    "MUL":  0x40,
+    "AND":  0x50,
+    "OR":   0x60,
+    "OUT":  0x70,
+    "FETCH": 0x80,
     "SLOT": 0x90,
-    "PUSH": 0xA0, 
-    "POP": 0xB0, 
-    "SETPAGE": 0xE0, 
+    "PUSH": 0xA0,
+    "POP":  0xB0,
+    "SETPAGE": 0xE0,
     "HALT": 0xF0,
 }
 
@@ -56,7 +57,6 @@ def get_const_asm(val):
 def not_asm(s):
     return [f"FETCH {s}", f"SLOT {TEMP_SLOT}", f"LOAD {MAX_VAL}", f"SUB {TEMP_SLOT}", f"SLOT {s}"]
 
-# not_asm variant: ACC already holds the value, skips FETCH
 def _not_from_acc(s):
     return [f"SLOT {TEMP_SLOT}", f"LOAD {MAX_VAL}", f"SUB {TEMP_SLOT}", f"SLOT {s}"]
 
@@ -75,14 +75,12 @@ def xor_asm(s, v):
     )
 
 def xnor_asm(s, v):
-    # Peep-hole: xor_asm ends with `OR TEMP, SLOT s`; not_asm starts with `FETCH s`.
-    # Drop the redundant `SLOT s` + `FETCH s` pair by chaining directly into _not_from_acc.
     not_v = MAX_VAL - v
     return (
         get_const_asm(not_v) + [f"SLOT {TEMP_SLOT}", f"FETCH {s}", f"AND {TEMP_SLOT}", "PUSH"] +
         [f"FETCH {s}", f"SLOT {TEMP_SLOT}", f"LOAD {MAX_VAL}", f"SUB {TEMP_SLOT}", f"SLOT {TEMP_SLOT}"] +
         get_const_asm(v) + [f"AND {TEMP_SLOT}", f"SLOT {TEMP_SLOT}", "POP", f"OR {TEMP_SLOT}"] +
-        _not_from_acc(s)   # ACC already holds XOR result — no FETCH needed
+        _not_from_acc(s)
     )
 
 # ── BASIC parser ─────────────────────────────────────────────────────────────
@@ -125,7 +123,7 @@ def parse_basic(line):
 
     if cmd == "XNOR" and len(parts) >= 3:
         s, v = int(parts[1]), int(parts[2]); _check_reserved(s, line)
-        return xnor_asm(s, v)  # optimized: no redundant SLOT/FETCH pair
+        return xnor_asm(s, v)
 
     if cmd == "PRINT" and len(parts) >= 2:
         return [f"FETCH {parts[1]}", "OUT"]
@@ -148,18 +146,28 @@ def compile_basic_file(filepath):
             for asm in parse_basic(line):
                 parts = asm.split()
                 if parts[0] not in OPCODES:
-                    # Fatal: unknown opcode would corrupt binary
                     raise SystemExit(f"[ERROR] Line {lineno}: unknown opcode '{parts[0]}'")
                 operand = int(parts[1]) & NIBBLE_MASK if len(parts) > 1 else 0
                 binary.append(OPCODES[parts[0]] | operand)
     binary.append(OPCODES["HALT"])
     return binary
 
+# ── serial open helper ────────────────────────────────────────────────────────
+
+def _open_serial(port, timeout=5):
+    ser = serial.Serial()
+    ser.port     = port
+    ser.baudrate = BAUD_RATE
+    ser.timeout  = timeout
+    ser.dtr      = False   # 포트 열기 전 DTR 비활성화 — Mega 자동 리셋 방지
+    ser.open()
+    return ser
+
 # ── uploader ─────────────────────────────────────────────────────────────────
 
 def program_bpu(port, bank, page, binary_data):
     try:
-        ser = serial.Serial(port, BAUD_RATE, timeout=5)
+        ser = _open_serial(port)
         time.sleep(2)
         ser.reset_input_buffer()
 
@@ -213,10 +221,67 @@ def program_bpu(port, bank, page, binary_data):
     except Exception as e:
         print(f"[UNEXPECTED ERROR] {e}")
 
+# ── monitor ───────────────────────────────────────────────────────────────────
+
+def monitor_bpu(port):
+    try:
+        ser = _open_serial(port, timeout=0.1)
+    except serial.SerialException as e:
+        print(f"['COM' PORT ERROR] {e}")
+        return
+
+    print(f"Connected to {port} ({BAUD_RATE} baud). DTR disabled — Mega will NOT reset.")
+    print("Commands: :boot  :run  :rst  :timing  :timing1  :timing2  :quit")
+    print("─" * 60)
+
+    stop_event = threading.Event()
+
+    def _reader():
+        while not stop_event.is_set():
+            try:
+                line = ser.readline().decode(errors='replace').rstrip()
+                if line:
+                    print(f"[MEGA] {line}", flush=True)
+            except serial.SerialException:
+                break
+
+    t = threading.Thread(target=_reader, daemon=True)
+    t.start()
+
+    while True:
+        try:
+            cmd = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+        if cmd == ":quit":
+            break
+        if cmd:
+            ser.write((cmd + '\n').encode())
+            ser.flush()
+
+    stop_event.set()
+    ser.close()
+    print("Disconnected.")
+
 # ── entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Usage: python compiler.py <filepath> <port> <bank> <page> -b
+    # Usage:
+    #   업로드: python compiler.py <filepath> <port> <bank> <page> [-b]
+    #   모니터: python compiler.py <port> --monitor
+
+    if "--monitor" in sys.argv:
+        idx  = sys.argv.index("--monitor")
+        port = sys.argv[idx - 1]
+        monitor_bpu(port)
+        sys.exit(0)
+
+    if len(sys.argv) < 3:
+        print("Usage:")
+        print("  Upload : python compiler.py <filepath> <port> <bank> <page> [-b]")
+        print("  Monitor: python compiler.py <port> --monitor")
+        sys.exit(1)
+
     filepath    = sys.argv[1]
     port        = sys.argv[2]
     bank        = int(sys.argv[3]) if len(sys.argv) > 3 else 0

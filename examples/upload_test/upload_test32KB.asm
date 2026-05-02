@@ -32769,4 +32769,4 @@ NOP
 NOP
 NOP
 NOP
-HALT    ; 혹시몰라서 그냥 추가함.
+HALT

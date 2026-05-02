@@ -55,9 +55,9 @@ The DDU is the data display unit, using Arduino Nano to display system status or
         Binary -> Dual328P
 ```
 
-- Processor1,2 `RESET Pin` LOW (use `:rst` on Serial Monitor)
+- Processor1,2 `RESET Pin` LOW (use `:rst` `python compiler.py COM6 --monitor`)
 - Load Binary(8bit) in RAM (kill the Serial Monitor and `python src/BPU/compiler.py <filepath> <port> <bank> <page> -b`)
-- Processor1,2 `RESET Pin` HIGH (use `:run` on Serial Monitor)
+- Processor1,2 `RESET Pin` HIGH (use `:run` on `python compiler.py COM6 --monitor`)
   - -> Processor starts.
 - 1. `Processor 1` Acquire `Bus Mastery` (`Processor 1 PC4` `LOW`; also RAM `A14` on that net)
 - 2. `Processor 1` Read Data from `62256 RAM` and processing Instruction Fetch & Execute
