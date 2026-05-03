@@ -50,7 +50,7 @@
 #define OP_HALT     0xF0
 
 // ─── Burst mode ───────────────────────────────────────────────────────────────
-#define BURST_SIZE  4
+#define BURST_SIZE  4   // 이론상 버스 주도권 한번에 가져가는 데이터 많을수록 더 빨라짐.
 
 // ─── Timing measurement ───────────────────────────────────────────────────────
 #define ENABLE_TIMING
@@ -290,7 +290,7 @@ uint8_t fetch() {
     DDRC |= 0b00000111;
     set_addr_bus(PC);
     SYNC_DELAY();
-    _delay_us(5);
+    _delay_us(1);   // 이거 성공하면 SYNC_DELAY() 랑 아래 asm volatile("nop\n\t"); 하나 더 추가해서 대체해보자.
     return read_data_bus();
 }
 
@@ -410,5 +410,5 @@ void loop() {
     set_high_z();
     SIGNAL_DONE();
 
-    _delay_us(20);
+    _delay_us(5);   // 딜레이를 좀 줄여보자
 }
