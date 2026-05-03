@@ -412,8 +412,6 @@ void loop() {
         timing_save_eeprom();
     }
 
-    timing_tick(actual);
-
     set_high_z();
     SIGNAL_DONE();
 

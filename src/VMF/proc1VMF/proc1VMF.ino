@@ -436,8 +436,6 @@ void loop() {
         timing_save_eeprom();
     }
 
-    timing_tick(actual);
-
     set_high_z();
     RELEASE_TO_CORE2();
     core2_ready = false;
