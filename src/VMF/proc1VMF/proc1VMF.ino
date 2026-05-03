@@ -69,13 +69,15 @@
 #define ENABLE_TIMING
 #define TIMING_INTERVAL  5120UL   // measure every N instructions
 
-// ─── EEPROM layout (9 bytes total) ───────────────────────────────────────────
+// ─── EEPROM layout (10 bytes total) ──────────────────────────────────────────
 //  0x00~0x03 : timing_result_us    (uint32_t, little-endian)
 //  0x04~0x07 : timing_result_instr (uint32_t, little-endian)
 //  0x08      : flag  0xAA = valid data present
+//  0x09      : regA final value
 #define EEPROM_ADDR_US    ((uint32_t*)0x00)
 #define EEPROM_ADDR_INSTR ((uint32_t*)0x04)
 #define EEPROM_ADDR_FLAG  ((uint8_t*) 0x08)
+#define EEPROM_ADDR_REG_A  ((uint8_t*) 0x09)
 #define EEPROM_FLAG_VALID 0xAA
 
 // ─── VM state ─────────────────────────────────────────────────────────────────
@@ -186,12 +188,10 @@ static void _uart_putu32(uint32_t v) {
     while (i--) _uart_putc(buf[i]);
 }
 
-// ── EEPROM save (called at HALT) ──────────────────────────────────────────────
-// eeprom_update_* skips write if value unchanged → minimises wear
-// 9 bytes × ~3.3 ms = ~30 ms total, well after execution ends
 void timing_save_eeprom() {
     eeprom_update_dword(EEPROM_ADDR_US,    timing_result_us);
     eeprom_update_dword(EEPROM_ADDR_INSTR, timing_result_instr);
+    eeprom_update_byte (EEPROM_ADDR_REG_A,  regA);   // ★ regA 최종값 저장
     eeprom_update_byte (EEPROM_ADDR_FLAG,  EEPROM_FLAG_VALID);
 }
 
@@ -201,6 +201,7 @@ void timing_load_and_print_eeprom() {
 
     uint32_t us    = eeprom_read_dword(EEPROM_ADDR_US);
     uint32_t instr = eeprom_read_dword(EEPROM_ADDR_INSTR);
+    uint8_t  rega  = eeprom_read_byte(EEPROM_ADDR_REG_A);
 
     _uart_init();
     _uart_puts("[TIMING] ");
@@ -210,15 +211,16 @@ void timing_load_and_print_eeprom() {
     _uart_puts(" us (");
     if (instr > 0) _uart_putu32((us * 1000UL) / instr);
     else           _uart_putc('?');
-    _uart_puts(" ns/instr)\r\n");
+    _uart_puts(" ns/instr) regA=0x");
+    // regA를 hex로 출력
+    _uart_putc("0123456789ABCDEF"[rega >> 4]);
+    _uart_putc("0123456789ABCDEF"[rega & 0x0F]);
+    _uart_puts("\r\n");
 
-    // ★ 전송 완전 완료 대기 후 UART 비활성화 ★
-    // TXC0: 마지막 비트까지 핀에서 전송 완료됨을 보장
-    // TXEN0 해제: PD1을 UART 하드웨어에서 GPIO로 반환 (595 SCK 사용 가능)
     while (!(UCSR0A & (1 << TXC0)));
     UCSR0B &= ~(1 << TXEN0);
 
-    eeprom_update_byte(EEPROM_ADDR_FLAG, 0x00);  // clear flag
+    eeprom_update_byte(EEPROM_ADDR_FLAG, 0x00);
 }
 
 #else

@@ -53,26 +53,19 @@
 #define BURST_SIZE  4
 
 // ─── Timing measurement ───────────────────────────────────────────────────────
-//
-//  Enable:  uncomment #define ENABLE_TIMING
-//  Disable: comment it out → zero runtime overhead
-//
-//  Result flow:
-//    HALT → eeprom_update saves 9 bytes (~30 ms, after execution)
-//    Next power-on → setup() reads EEPROM, prints via UART (595 not yet driven)
-//    → flag cleared → normal execution begins
-//
 #define ENABLE_TIMING
 #define TIMING_INTERVAL  5120UL
 
-// ─── EEPROM layout (9 bytes total) ───────────────────────────────────────────
-//  Core 2 uses offset 0x10 to avoid collision with Core 1 (0x00~0x08)
+// ─── EEPROM layout (10 bytes) ─────────────────────────────────────────────────
+//  Core 2 uses offset 0x10 to avoid collision with Core 1 (0x00~0x09)
 //  0x10~0x13 : timing_result_us    (uint32_t, little-endian)
 //  0x14~0x17 : timing_result_instr (uint32_t, little-endian)
 //  0x18      : flag  0xAA = valid data present
+//  0x19      : regA final value
 #define EEPROM_ADDR_US    ((uint32_t*)0x10)
 #define EEPROM_ADDR_INSTR ((uint32_t*)0x14)
 #define EEPROM_ADDR_FLAG  ((uint8_t*) 0x18)
+#define EEPROM_ADDR_REG_A  ((uint8_t*) 0x19)
 #define EEPROM_FLAG_VALID 0xAA
 
 // ─── VM state ─────────────────────────────────────────────────────────────────
@@ -131,7 +124,7 @@ static bool     _timing_active  = false;
 
 void timing_init() {
     TCCR1A = 0;
-    TCCR1B = (1 << CS11);
+    TCCR1B = (1 << CS11);    // prescaler 8 → 0.5 µs/tick @ 16 MHz
     TIMSK1 = (1 << TOIE1);
     TCNT1  = 0;
     _t1_overflows = 0;
@@ -159,7 +152,7 @@ static inline bool timing_tick(uint8_t actual_count) {
 
 static void _uart_init() {
     UBRR0H = 0;
-    UBRR0L = 103;   // 9600 baud @ 16 MHz, must match with '#define CORE_BAUD 9600' in BPUmega.ino
+    UBRR0L = 103;   // 9600 baud @ 16 MHz
     UCSR0B = (1 << TXEN0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
 }
@@ -183,6 +176,7 @@ static void _uart_putu32(uint32_t v) {
 void timing_save_eeprom() {
     eeprom_update_dword(EEPROM_ADDR_US,    timing_result_us);
     eeprom_update_dword(EEPROM_ADDR_INSTR, timing_result_instr);
+    eeprom_update_byte (EEPROM_ADDR_REG_A,  regA);
     eeprom_update_byte (EEPROM_ADDR_FLAG,  EEPROM_FLAG_VALID);
 }
 
@@ -191,6 +185,7 @@ void timing_load_and_print_eeprom() {
 
     uint32_t us    = eeprom_read_dword(EEPROM_ADDR_US);
     uint32_t instr = eeprom_read_dword(EEPROM_ADDR_INSTR);
+    uint8_t  rega  = eeprom_read_byte (EEPROM_ADDR_REG_A);
 
     _uart_init();
     _uart_puts("[TIMING] ");
@@ -200,11 +195,11 @@ void timing_load_and_print_eeprom() {
     _uart_puts(" us (");
     if (instr > 0) _uart_putu32((us * 1000UL) / instr);
     else           _uart_putc('?');
-    _uart_puts(" ns/instr)\r\n");
+    _uart_puts(" ns/instr) regA=0x");
+    _uart_putc("0123456789ABCDEF"[rega >> 4]);
+    _uart_putc("0123456789ABCDEF"[rega & 0x0F]);
+    _uart_puts("\r\n");
 
-    // 전송 완전 완료 대기 후 UART 비활성화 ★
-    // TXC0: 마지막 비트까지 핀에서 전송 완료됨을 보장
-    // TXEN0 해제: PD1을 UART 하드웨어에서 GPIO로 반환 (595 SCK 사용 가능)
     while (!(UCSR0A & (1 << TXC0)));
     UCSR0B &= ~(1 << TXEN0);
 
@@ -376,7 +371,7 @@ void setup() {
 
     set_page_595(0);    // ← 여기서부터 595 구동 시작
 
-    SIGNAL_DONE();   // initial state: ready
+    SIGNAL_DONE();      // initial state: ready
 
     timing_init();
     timing_start_window();
@@ -392,7 +387,7 @@ void loop() {
     if (halted) {
         set_high_z();
         SIGNAL_DONE();
-        timing_save_eeprom();   // ~30 ms, 실행 종료 후라 측정값 오염 없음
+        timing_save_eeprom();
         while (1);
     }
 
