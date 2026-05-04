@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- * Processor 1-"SINGLE MODE" - Virtual Machine Firmware v6.0 (Timer added)
+ * Processor 1-"SINGLE MODE" - Virtual Machine Firmware v7.0)
  * ============================================================================
  *
  * Pin layout:
@@ -40,17 +40,14 @@
 #define OP_SETPAGE  0xE0
 #define OP_HALT     0xF0
 
-// ─── Burst mode ───────────────────────────────────────────────────────────────
-#define BURST_SIZE  4
-
 // ─── Timing measurement ───────────────────────────────────────────────────────
 #define ENABLE_TIMING
 #define TIMING_INTERVAL  5120UL
 
 // ─── EEPROM layout (10 bytes) ─────────────────────────────────────────────────
-//  0x00~0x03 : timing_result_us    (uint32_t, little-endian)
-//  0x04~0x07 : timing_result_instr (uint32_t, little-endian)
-//  0x08      : flag  0xAA = valid data present
+//  0x00~0x03 : timing_result_us
+//  0x04~0x07 : timing_result_instr
+//  0x08      : flag 0xAA = valid
 //  0x09      : regA final value
 #define EEPROM_ADDR_US    ((uint32_t*)0x00)
 #define EEPROM_ADDR_INSTR ((uint32_t*)0x04)
@@ -71,8 +68,7 @@ volatile uint8_t  cached_page  = 0xFF;
 #define PAGE_REG slot[15]
 
 // ─── Hardware macros ─────────────────────────────────────────────────────────
-#define ACTIVATE_CORE1()    PORTC &= ~(1 << 4)
-
+// 싱글코어 — 버스 항상 점유, 반납 없음
 #define HC595_SER_HIGH()    PORTD |=  (1 << 0)
 #define HC595_SER_LOW()     PORTD &= ~(1 << 0)
 #define HC595_SCK_HIGH()    PORTD |=  (1 << 1)
@@ -228,7 +224,7 @@ void set_page_595(uint8_t page) {
 
 
 // ============================================================================
-//  Address bus
+//  Address / Data bus
 // ============================================================================
 inline void set_addr_bus(uint8_t addr) {
     addr &= 0b01111111;
@@ -236,18 +232,14 @@ inline void set_addr_bus(uint8_t addr) {
     PORTC = (PORTC & 0b11111000) | ((addr >> 4) & 0b00000111);
 }
 
-
-// ============================================================================
-//  Data bus I/O
-// ============================================================================
-inline void set_data_output() {
-    DDRD |= 0b11111100;
-    DDRB |= 0b00000011;
-}
-
 inline void set_data_input() {
     DDRD  &= 0b00000011;  PORTD &= 0b00000011;
     DDRB  &= 0b11111100;  PORTB &= 0b11111100;
+}
+
+inline void set_data_output() {
+    DDRD |= 0b11111100;
+    DDRB |= 0b00000011;
 }
 
 inline void write_data_bus(uint8_t data) {
@@ -261,26 +253,16 @@ inline uint8_t read_data_bus() {
 
 
 // ============================================================================
-//  High-Z
+//  Fetch (매 명령어마다 — 버스트 없음)
+//  싱글코어는 버스를 항상 점유하므로 High-Z 전환 없음
 // ============================================================================
-inline void set_high_z() {
-    DDRD  &= 0b00000011;  PORTD &= 0b00000011;
-    DDRB  &= 0b11000000;  PORTB &= 0b11000000;
-    DDRC  &= 0b11111000;  PORTC &= 0b11111000;
-}
-
-
-// ============================================================================
-//  Fetch
-// ============================================================================
-uint8_t fetch() {
-    ACTIVATE_CORE1();
+static uint8_t fetch() {
     set_data_input();
     DDRB |= 0b00111100;
     DDRC |= 0b00000111;
     set_addr_bus(PC);
     SYNC_DELAY();
-    _delay_us(5);
+    _delay_us(5);   // 듀얼(1µs)보다 의도적으로 보수적 — 공정 비교
     return read_data_bus();
 }
 
@@ -288,7 +270,7 @@ uint8_t fetch() {
 // ============================================================================
 //  Output
 // ============================================================================
-void output_register(uint8_t value) {
+static void output_register(uint8_t value) {
     set_data_output();
     write_data_bus(value);
     SYNC_DELAY();
@@ -300,7 +282,7 @@ void output_register(uint8_t value) {
 // ============================================================================
 //  Execute
 // ============================================================================
-void execute(uint8_t instruction) {
+static void execute(uint8_t instruction) {
     uint8_t opcode  = instruction & 0xF0;
     uint8_t operand = instruction & 0x0F;
 
@@ -313,8 +295,8 @@ void execute(uint8_t instruction) {
         case OP_AND:    regA &= operand;                break;
         case OP_OR:     regA |= operand;                break;
         case OP_OUT:    output_register(regA);          break;
-        case OP_FETCH:  regA = slot[operand & 0x0F];    break;
-        case OP_SLOT:   slot[operand & 0x0F] = regA;    break;
+        case OP_FETCH:  regA = slot[operand & 0x0F];   break;
+        case OP_SLOT:   slot[operand & 0x0F] = regA;   break;
 
         case OP_PUSH:
             if (stack_ptr < 8) stack[stack_ptr++] = regA;
@@ -349,10 +331,13 @@ void setup() {
     DDRD  |= 0b00000011;
     DDRC  |= 0b00001000;
     DDRC  |= 0b00010000;
-    DDRC  &= ~0b00100000;   // PC5 input (미사용이지만 입력으로 유지)
+    // PC5 미사용 — 입력으로 유지
+    DDRC  &= ~0b00100000;
     PORTC &= ~(1 << 5);
 
-    ACTIVATE_CORE1();
+    // 버스 항상 점유
+    DDRC |= 0b00000111;
+    DDRB |= 0b00111100;
 
     regA = 0x00; PC = 0; stack_ptr = 0;
     current_page = 0; cached_page = 0xFF; halted = false;
@@ -360,6 +345,7 @@ void setup() {
     for (uint8_t i = 0; i < 8;  i++) stack[i] = 0;
     PAGE_REG = 0;
 
+    // ★ 595 구동 전 — UART 안전 구간 ★
     timing_load_and_print_eeprom();
 
     set_page_595(0);
@@ -367,34 +353,29 @@ void setup() {
     timing_init();
     timing_start_window();
 
-    _delay_ms(100);
+    _delay_ms(100);  // 듀얼(10ms)보다 보수적 — 공정 비교
 }
 
 
 // ============================================================================
-//  Loop
+//  Loop — 버스트 없음, 매 명령어마다 fetch/execute
+//  fetch와 execute가 분리되지 않아 병렬 구간 없음
+//  → 듀얼 대비 구조적 열위
 // ============================================================================
 void loop() {
     if (halted) {
-        set_high_z();
         timing_save_eeprom();
         while (1);
     }
 
-    uint8_t actual = 0;
-    for (uint8_t i = 0; i < BURST_SIZE; i++) {
-        execute(fetch());
-        PC++;
-        if (PC >= 128) PC = 0;
-        actual++;
-        if (halted) break;
-    }
+    // fetch → execute 순차 실행 (겹치는 구간 없음)
+    uint8_t instruction = fetch();
+    PC++;
+    if (PC >= 128) PC = 0;
 
-    // ★ HALT 없이도 인터벌 완료 시 즉시 저장 ★
-    if (timing_tick(actual)) {
+    execute(instruction);
+
+    if (timing_tick(1)) {
         timing_save_eeprom();
     }
-
-    set_high_z();
-    ACTIVATE_CORE1();
 }

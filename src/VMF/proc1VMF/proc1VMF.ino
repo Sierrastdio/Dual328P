@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- * Core 1 - Virtual Machine Firmware v7.0 (cache memory structure added)
+ * Processor 1 - Virtual Machine Firmware v7.0 (cache memory structure added)
  * ============================================================================
  * 혁명적 변경:
  * - 명령어 캐시 버퍼 도입 (4바이트)
