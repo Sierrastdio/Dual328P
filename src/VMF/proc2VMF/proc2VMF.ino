@@ -69,14 +69,16 @@
 #define EEPROM_FLAG_VALID 0xAA
 
 // ─── VM state ─────────────────────────────────────────────────────────────────
-volatile uint8_t regA         = 0x00;
+volatile uint8_t regA = 0x00;
 volatile uint8_t slot[16];
 volatile uint8_t stack[8];
-volatile uint8_t stack_ptr    = 0;
-volatile uint8_t PC           = 0;
+volatile uint8_t stack_ptr = 0;
+volatile uint8_t PC = 0;
 volatile uint8_t current_page = 0;
-volatile bool    halted       = false;
-volatile uint8_t cached_page  = 0xFF;
+volatile bool    halted = false;
+
+volatile uint8_t inst_cache[CACHE_SIZE];
+volatile uint8_t cache_valid = 0;  // 캐시에 유효한 명령어 개수
 
 #define PAGE_REG slot[15]
 

@@ -1,34 +1,22 @@
 /*
  * ============================================================================
- * Processor 1 - Virtual Machine Firmware v6.0 (Timer added)
+ * Core 1 - Virtual Machine Firmware v6.0 (캐시 버퍼 구조)
  * ============================================================================
- *
- * Pin layout:
- * - PD2~7, PB0~1: Data bus (D0~D7)  → 74HC245 data buffer P1
- * - PB2~5, PC0~2: Address bus (A0~A6) → 74HC245 address buffer P1
- * - PD0: 74HC595-Processor1 SER (Serial Data)   ← conflicts with UART RX
- * - PD1: 74HC595-Processor1 SCK (Shift Clock)   ← conflicts with UART TX
- * - PC3: 74HC595-Processor1 RCK (Latch Clock)
- * - PC4: Processor Select (0=Processor1 Active) + EEPROM A14
- * - PC5: Processor 2 done signal input (LOW=busy, HIGH=done)
- *
- * Paging system:
- * - 74HC595 controls A7~A13 (7 bits)
- * - 128 pages × 128 bytes = 16 KB addressable
- * - slot[15] = PAGE_REG (dedicated page register)
- *
- * Handshake:
- * - Core 2 (Processor 2): sends PC5 signal on task completion (High/Low)
- * - Core 1 (Processor 1): detects Core 2 completion via PC5 interrupt (PCINT1)
- *
- * Timing read flow:
- * - HALT → timing data saved to internal EEPROM
- * - Next boot → setup() reads EEPROM and prints via UART before 595 is driven
- *
+ * 혁명적 변경:
+ * - 명령어 캐시 버퍼 도입 (4바이트)
+ * - Fetch 단계와 Execute 단계 완전 분리
+ * - Execute 중 버스 불필요 → 진짜 병렬 처리!
+ * 
+ * 파이프라인:
+ * Phase 1 (Fetch):   버스 획득 → 4개 명령어 읽기 → 버퍼 저장 → 버스 반납
+ * Phase 2 (Execute): 버퍼에서 읽어서 실행 (버스 불필요!)
+ * 
+ * 이론 성능:
+ * - Fetch: 20us (버스 필요)
+ * - Execute: 4us (내부 처리, Core 2와 동시 진행!)
+ * - 총: 24us (기존 48us 대비 2배!)
  * ============================================================================
  */
-
-#include <Arduino.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>
@@ -50,34 +38,22 @@
 #define OP_SETPAGE  0xE0
 #define OP_HALT     0xF0
 
-// ─── Burst mode ───────────────────────────────────────────────────────────────
-#define BURST_SIZE  4   // 이론상 버스 주도권 한번에 가져가는 데이터 많을수록 더 빨라짐.
+// ─── Cache / burst ────────────────────────────────────────────────────────────
+#define CACHE_SIZE  4   // instructions fetched per bus acquisition
 
 // ─── Timing measurement ───────────────────────────────────────────────────────
-//
-//  Enable:  uncomment #define ENABLE_TIMING
-//  Disable: comment it out → zero runtime overhead (all timing code compiles away)
-//
-//  Timer1 runs free with prescaler 8  →  1 tick = 0.5 µs @ 16 MHz
-//  Overflow ISR extends counter to 32 bits  →  ~35 min before wrap
-//
-//  Result flow:
-//    HALT → eeprom_update saves 9 bytes (~30 ms, after execution)
-//    Next power-on → setup() reads EEPROM, prints via UART (595 not yet driven)
-//    → flag cleared → normal execution begins
-//
 #define ENABLE_TIMING
-#define TIMING_INTERVAL  5120UL   // measure every N instructions
+#define TIMING_INTERVAL  5120UL
 
-// ─── EEPROM layout (10 bytes total) ──────────────────────────────────────────
-//  0x00~0x03 : timing_result_us    (uint32_t, little-endian)
-//  0x04~0x07 : timing_result_instr (uint32_t, little-endian)
-//  0x08      : flag  0xAA = valid data present
+// ─── EEPROM layout (10 bytes) ─────────────────────────────────────────────────
+//  0x00~0x03 : timing_result_us
+//  0x04~0x07 : timing_result_instr
+//  0x08      : flag 0xAA = valid
 //  0x09      : regA final value
 #define EEPROM_ADDR_US    ((uint32_t*)0x00)
 #define EEPROM_ADDR_INSTR ((uint32_t*)0x04)
 #define EEPROM_ADDR_FLAG  ((uint8_t*) 0x08)
-#define EEPROM_ADDR_REG_A  ((uint8_t*) 0x09)
+#define EEPROM_ADDR_REGA  ((uint8_t*) 0x09)
 #define EEPROM_FLAG_VALID 0xAA
 
 // ─── VM state ─────────────────────────────────────────────────────────────────
@@ -91,7 +67,11 @@ volatile bool     halted       = false;
 volatile bool     core2_ready  = true;
 volatile uint8_t  cached_page  = 0xFF;
 
+// ─── Instruction cache ────────────────────────────────────────────────────────
+static uint8_t inst_cache[CACHE_SIZE];
+
 #define PAGE_REG slot[15]
+// slot[14] = TEMP_SLOT (compiler reserved — do NOT use here)
 
 // ─── Hardware macros ─────────────────────────────────────────────────────────
 #define ACTIVATE_CORE1()    PORTC &= ~(1 << 4)
@@ -156,7 +136,7 @@ static inline bool timing_tick(uint8_t actual_count) {
     _timing_counted += actual_count;
     if (_timing_counted >= TIMING_INTERVAL) {
         uint32_t elapsed    = _get_ticks() - _timing_start;
-        timing_result_us    = elapsed >> 1;   // ticks × 0.5 → µs
+        timing_result_us    = elapsed >> 1;
         timing_result_instr = _timing_counted;
         _timing_active = false;
         return true;
@@ -164,10 +144,9 @@ static inline bool timing_tick(uint8_t actual_count) {
     return false;
 }
 
-// ── UART (safe only before 595 is driven) ────────────────────────────────────
 static void _uart_init() {
     UBRR0H = 0;
-    UBRR0L = 103;   // 9600 baud @ 16 MHz, must match with '#define CORE_BAUD 9600' in BPUmega.ino
+    UBRR0L = 103;
     UCSR0B = (1 << TXEN0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
 }
@@ -191,17 +170,16 @@ static void _uart_putu32(uint32_t v) {
 void timing_save_eeprom() {
     eeprom_update_dword(EEPROM_ADDR_US,    timing_result_us);
     eeprom_update_dword(EEPROM_ADDR_INSTR, timing_result_instr);
-    eeprom_update_byte (EEPROM_ADDR_REG_A,  regA);   // ★ regA 최종값 저장
+    eeprom_update_byte (EEPROM_ADDR_REGA,  regA);
     eeprom_update_byte (EEPROM_ADDR_FLAG,  EEPROM_FLAG_VALID);
 }
 
-// ── EEPROM load + print (called at next boot, before 595 is driven) ───────────
 void timing_load_and_print_eeprom() {
     if (eeprom_read_byte(EEPROM_ADDR_FLAG) != EEPROM_FLAG_VALID) return;
 
     uint32_t us    = eeprom_read_dword(EEPROM_ADDR_US);
     uint32_t instr = eeprom_read_dword(EEPROM_ADDR_INSTR);
-    uint8_t  rega  = eeprom_read_byte(EEPROM_ADDR_REG_A);
+    uint8_t  rega  = eeprom_read_byte (EEPROM_ADDR_REGA);
 
     _uart_init();
     _uart_puts("[TIMING] ");
@@ -212,7 +190,6 @@ void timing_load_and_print_eeprom() {
     if (instr > 0) _uart_putu32((us * 1000UL) / instr);
     else           _uart_putc('?');
     _uart_puts(" ns/instr) regA=0x");
-    // regA를 hex로 출력
     _uart_putc("0123456789ABCDEF"[rega >> 4]);
     _uart_putc("0123456789ABCDEF"[rega & 0x0F]);
     _uart_puts("\r\n");
@@ -264,7 +241,7 @@ void set_page_595(uint8_t page) {
 
 
 // ============================================================================
-//  Address bus
+//  Address / Data bus
 // ============================================================================
 inline void set_addr_bus(uint8_t addr) {
     addr &= 0b01111111;
@@ -272,10 +249,6 @@ inline void set_addr_bus(uint8_t addr) {
     PORTC = (PORTC & 0b11111000) | ((addr >> 4) & 0b00000111);
 }
 
-
-// ============================================================================
-//  Data bus I/O
-// ============================================================================
 inline void set_data_output() {
     DDRD |= 0b11111100;
     DDRB |= 0b00000011;
@@ -307,71 +280,102 @@ inline void set_high_z() {
 
 
 // ============================================================================
-//  Fetch
+//  Phase 1: Fetch burst into cache (bus required)
 // ============================================================================
-uint8_t fetch() {
-    ACTIVATE_CORE1();
+static uint8_t fetch_burst() {
+    // 버스 이미 획득된 상태에서 호출
     set_data_input();
     DDRB |= 0b00111100;
     DDRC |= 0b00000111;
-    set_addr_bus(PC);
-    SYNC_DELAY();
-    _delay_us(1);   // 이거 성공하면 SYNC_DELAY() 랑 아래 asm volatile("nop\n\t"); 하나 더 추가해서 대체해보자.
-    return read_data_bus();
+
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < CACHE_SIZE; i++) {
+        set_addr_bus(PC);
+        SYNC_DELAY();
+        _delay_us(1);               // 62256: 100ns max, 1µs = 충분
+        inst_cache[i] = read_data_bus();
+        PC++;
+        if (PC >= 128) PC = 0;
+        count++;
+    }
+    return count;
 }
 
 
 // ============================================================================
-//  Output
+//  Output (OUT 명령어 — execute 중 버스 재획득 필요)
+//  Core2가 버스를 쓰고 있을 수 있으므로 완료 대기 후 획득
 // ============================================================================
-void output_register(uint8_t value) {
+static void output_register(uint8_t value) {
+    // Core2 완료 대기
+    while (!core2_ready) asm volatile("nop");
+
+    // 버스 재획득
+    ACTIVATE_CORE1();
     set_data_output();
     write_data_bus(value);
     SYNC_DELAY();
     _delay_us(50);
     set_data_input();
+
+    // 버스 반납 후 Core2 재개
+    set_high_z();
+    core2_ready = false;
+    RELEASE_TO_CORE2();
 }
 
 
 // ============================================================================
-//  Execute
+//  Phase 2: Execute from cache (bus NOT required — true parallel window)
+//  Returns actual executed count
 // ============================================================================
-void execute(uint8_t instruction) {
-    uint8_t opcode  = instruction & 0xF0;
-    uint8_t operand = instruction & 0x0F;
+static uint8_t execute_cache(uint8_t count) {
+    uint8_t actual = 0;
+    for (uint8_t i = 0; i < count; i++) {
+        uint8_t opcode  = inst_cache[i] & 0xF0;
+        uint8_t operand = inst_cache[i] & 0x0F;
 
-    switch (opcode) {
-        case OP_NOP:                                    break;
-        case OP_LOAD:   regA  = operand;                break;
-        case OP_ADD:    regA += operand;                break;
-        case OP_SUB:    regA -= operand;                break;
-        case OP_MUL:    regA *= operand;                break;
-        case OP_AND:    regA &= operand;                break;
-        case OP_OR:     regA |= operand;                break;
-        case OP_OUT:    output_register(regA);          break;
-        case OP_FETCH:  regA = slot[operand & 0x0F];    break;
-        case OP_SLOT:   slot[operand & 0x0F] = regA;    break;
+        switch (opcode) {
+            case OP_NOP:                                    break;
+            case OP_LOAD:   regA  = operand;                break;
+            case OP_ADD:    regA += operand;                break;
+            case OP_SUB:    regA -= operand;                break;
+            case OP_MUL:    regA *= operand;                break;
+            case OP_AND:    regA &= operand;                break;
+            case OP_OR:     regA |= operand;                break;
+            case OP_FETCH:  regA = slot[operand & 0x0F];   break;
+            case OP_SLOT:   slot[operand & 0x0F] = regA;   break;
 
-        case OP_PUSH:
-            if (stack_ptr < 8) stack[stack_ptr++] = regA;
-            break;
+            case OP_OUT:
+                // ★ 버스 재획득 필요 — Core2 완료 대기 포함 ★
+                output_register(regA);
+                break;
 
-        case OP_POP:
-            if (stack_ptr > 0) regA = stack[--stack_ptr];
-            break;
+            case OP_PUSH:
+                if (stack_ptr < 8) stack[stack_ptr++] = regA;
+                break;
 
-        case OP_SETPAGE:
-            current_page = PAGE_REG & 0b01111111;
-            PC = 0;
-            set_page_595(current_page);
-            break;
+            case OP_POP:
+                if (stack_ptr > 0) regA = stack[--stack_ptr];
+                break;
 
-        case OP_HALT:
-            halted = true;
-            break;
+            case OP_SETPAGE:
+                // 595는 Core1 전용 — 버스 충돌 없음
+                current_page = PAGE_REG & 0b01111111;
+                PC = 0;
+                set_page_595(current_page);
+                break;
 
-        default: break;
+            case OP_HALT:
+                halted = true;
+                actual++;
+                return actual;
+
+            default: break;
+        }
+        actual++;
     }
+    return actual;
 }
 
 
@@ -398,18 +402,17 @@ void setup() {
     current_page = 0; cached_page = 0xFF; halted = false; core2_ready = true;
     for (uint8_t i = 0; i < 16; i++) slot[i]  = 0;
     for (uint8_t i = 0; i < 8;  i++) stack[i] = 0;
+    for (uint8_t i = 0; i < CACHE_SIZE; i++) inst_cache[i] = 0;
     PAGE_REG = 0;
 
-    // ★ 595가 구동되기 전 — UART 안전 구간 ★
-    // 이전 실행에서 저장된 타이밍 결과가 있으면 출력 후 flag 클리어
-    timing_load_and_print_eeprom();
+    timing_load_and_print_eeprom();  // 595 구동 전 UART 안전 구간
 
-    set_page_595(0);    // ← 여기서부터 595 구동 시작 (UART 사용 불가)
+    set_page_595(0);    // 여기서부터 595 구동
 
     timing_init();
     timing_start_window();
 
-    _delay_ms(100);
+    _delay_ms(10);
 }
 
 
@@ -420,47 +423,28 @@ void loop() {
     if (halted) {
         set_high_z();
         RELEASE_TO_CORE2();
-        timing_save_eeprom();   // ~30 ms, 실행 종료 후라 측정값 오염 없음
+        timing_save_eeprom();
         while (1);
     }
 
-    uint8_t actual = 0;
-    for (uint8_t i = 0; i < BURST_SIZE; i++) {
-        execute(fetch());
-        PC++;
-        if (PC >= 128) PC = 0;
-        actual++;
-        if (halted) break;
-    }
+    // ── Phase 1: FETCH (버스 점유) ────────────────────────────────────────────
+    ACTIVATE_CORE1();
+    uint8_t fetched = fetch_burst();
 
-    // ★ HALT 없이도 인터벌 완료 시 즉시 저장 ★
+    // Core2에 버스 넘기기 전에 플래그 초기화 (경쟁 상태 방지)
+    core2_ready = false;
+    set_high_z();
+    RELEASE_TO_CORE2();
+
+    // ── Phase 2: EXECUTE (버스 불필요 — Core2 fetch와 진짜 병렬!) ────────────
+    uint8_t actual = execute_cache(fetched);
+
+    // 타이밍 기록
     if (timing_tick(actual)) {
         timing_save_eeprom();
     }
 
-    set_high_z();
-    RELEASE_TO_CORE2();
-    core2_ready = false;
-
+    // ── 동기화: Core2 완료 대기 ───────────────────────────────────────────────
+    // OUT 명령어가 없었다면 Core2가 아직 실행 중일 수 있음
     while (!core2_ready) asm volatile("nop");
-
-    ACTIVATE_CORE1();
 }
-
-
-/*
- * ============================================================================
- * Performance summary
- * ============================================================================
- *
- * Timing result read flow:
- *   Run → HALT → EEPROM save (9 bytes, ~30 ms)
- *   Power cycle → boot → UART print (595 not yet driven) → flag cleared
- *   No extra pins / ISP / chip removal needed
- *
- * Timing subsystem overhead (ENABLE_TIMING active):
- *   Per burst : 1× uint32_t add + 1× compare  (~2–3 CPU cycles)
- *   At HALT   : EEPROM write ~30 ms, after execution — no measurement impact
- *   Disabled  : #undef ENABLE_TIMING → zero overhead, zero code size impact
- * ============================================================================
- */
