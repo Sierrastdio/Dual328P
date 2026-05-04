@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- * Processor 2 - Virtual Machine Firmware v6.0 (Timer added)
+ * Processor 2 - Virtual Machine Firmware v7.0 (cache memory structure added)
  * ============================================================================
  *
  * Pin layout:
@@ -27,7 +27,6 @@
  *
  * ============================================================================
  */
-#include <Arduino.h>
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>
@@ -49,8 +48,8 @@
 #define OP_SETPAGE  0xE0
 #define OP_HALT     0xF0
 
-// ─── Burst mode ───────────────────────────────────────────────────────────────
-#define BURST_SIZE  4   // 이론상 버스 주도권 한번에 가져가는 데이터 많을수록 더 빨라짐.
+// ─── Cache / burst ────────────────────────────────────────────────────────────
+#define CACHE_SIZE  4
 
 // ─── Timing measurement ───────────────────────────────────────────────────────
 #define ENABLE_TIMING
@@ -58,33 +57,36 @@
 
 // ─── EEPROM layout (10 bytes) ─────────────────────────────────────────────────
 //  Core 2 uses offset 0x10 to avoid collision with Core 1 (0x00~0x09)
-//  0x10~0x13 : timing_result_us    (uint32_t, little-endian)
-//  0x14~0x17 : timing_result_instr (uint32_t, little-endian)
-//  0x18      : flag  0xAA = valid data present
+//  0x10~0x13 : timing_result_us
+//  0x14~0x17 : timing_result_instr
+//  0x18      : flag 0xAA = valid
 //  0x19      : regA final value
 #define EEPROM_ADDR_US    ((uint32_t*)0x10)
 #define EEPROM_ADDR_INSTR ((uint32_t*)0x14)
 #define EEPROM_ADDR_FLAG  ((uint8_t*) 0x18)
-#define EEPROM_ADDR_REG_A  ((uint8_t*) 0x19)
+#define EEPROM_ADDR_REGA  ((uint8_t*) 0x19)
 #define EEPROM_FLAG_VALID 0xAA
 
 // ─── VM state ─────────────────────────────────────────────────────────────────
-volatile uint8_t regA = 0x00;
-volatile uint8_t slot[16];
-volatile uint8_t stack[8];
-volatile uint8_t stack_ptr = 0;
-volatile uint8_t PC = 0;
-volatile uint8_t current_page = 0;
-volatile bool    halted = false;
+volatile uint8_t  regA         = 0x00;
+volatile uint8_t  slot[16];
+volatile uint8_t  stack[8];
+volatile uint8_t  stack_ptr    = 0;
+volatile uint8_t  PC           = 0;
+volatile uint8_t  current_page = 0;
+volatile bool     halted       = false;
+volatile uint8_t  cached_page  = 0xFF;
 
-volatile uint8_t inst_cache[CACHE_SIZE];
-volatile uint8_t cache_valid = 0;  // 캐시에 유효한 명령어 개수
+// ─── Instruction cache ────────────────────────────────────────────────────────
+static uint8_t inst_cache[CACHE_SIZE];
 
 #define PAGE_REG slot[15]
+// slot[14] = TEMP_SLOT (compiler reserved — do NOT use here)
 
 // ─── Hardware macros ─────────────────────────────────────────────────────────
-#define SIGNAL_BUSY()       PORTC &= ~(1 << 5)  // PC5 = LOW  (working)
-#define SIGNAL_DONE()       PORTC |=  (1 << 5)  // PC5 = HIGH (done)
+// Core 2는 PC5를 출력으로 사용 (Core 1에 완료 신호 전송)
+#define SIGNAL_BUSY()       PORTC &= ~(1 << 5)  // LOW  = 작업 중
+#define SIGNAL_DONE()       PORTC |=  (1 << 5)  // HIGH = 완료
 
 #define HC595_SER_HIGH()    PORTD |=  (1 << 0)
 #define HC595_SER_LOW()     PORTD &= ~(1 << 0)
@@ -126,7 +128,7 @@ static bool     _timing_active  = false;
 
 void timing_init() {
     TCCR1A = 0;
-    TCCR1B = (1 << CS11);    // prescaler 8 → 0.5 µs/tick @ 16 MHz
+    TCCR1B = (1 << CS11);
     TIMSK1 = (1 << TOIE1);
     TCNT1  = 0;
     _t1_overflows = 0;
@@ -154,7 +156,7 @@ static inline bool timing_tick(uint8_t actual_count) {
 
 static void _uart_init() {
     UBRR0H = 0;
-    UBRR0L = 103;   // 9600 baud @ 16 MHz
+    UBRR0L = 103;
     UCSR0B = (1 << TXEN0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
 }
@@ -178,7 +180,7 @@ static void _uart_putu32(uint32_t v) {
 void timing_save_eeprom() {
     eeprom_update_dword(EEPROM_ADDR_US,    timing_result_us);
     eeprom_update_dword(EEPROM_ADDR_INSTR, timing_result_instr);
-    eeprom_update_byte (EEPROM_ADDR_REG_A,  regA);
+    eeprom_update_byte (EEPROM_ADDR_REGA,  regA);
     eeprom_update_byte (EEPROM_ADDR_FLAG,  EEPROM_FLAG_VALID);
 }
 
@@ -187,7 +189,7 @@ void timing_load_and_print_eeprom() {
 
     uint32_t us    = eeprom_read_dword(EEPROM_ADDR_US);
     uint32_t instr = eeprom_read_dword(EEPROM_ADDR_INSTR);
-    uint8_t  rega  = eeprom_read_byte (EEPROM_ADDR_REG_A);
+    uint8_t  rega  = eeprom_read_byte (EEPROM_ADDR_REGA);
 
     _uart_init();
     _uart_puts("[TIMING] ");
@@ -241,7 +243,7 @@ void set_page_595(uint8_t page) {
 
 
 // ============================================================================
-//  Address bus
+//  Address / Data bus
 // ============================================================================
 inline void set_addr_bus(uint8_t addr) {
     addr &= 0b01111111;
@@ -249,10 +251,6 @@ inline void set_addr_bus(uint8_t addr) {
     PORTC = (PORTC & 0b11111000) | ((addr >> 4) & 0b00000111);
 }
 
-
-// ============================================================================
-//  Data bus I/O
-// ============================================================================
 inline void set_data_output() {
     DDRD |= 0b11111100;
     DDRB |= 0b00000011;
@@ -284,70 +282,93 @@ inline void set_high_z() {
 
 
 // ============================================================================
-//  Fetch
+//  Phase 1: Fetch burst into cache (bus required)
 // ============================================================================
-uint8_t fetch() {
+static uint8_t fetch_burst() {
     set_data_input();
     DDRB |= 0b00111100;
     DDRC |= 0b00000111;
-    set_addr_bus(PC);
-    SYNC_DELAY();
-    _delay_us(1);   // 이거 성공하면 SYNC_DELAY() 랑 아래 asm volatile("nop\n\t"); 하나 더 추가해서 대체해보자.
-    return read_data_bus();
+
+    uint8_t count = 0;
+    for (uint8_t i = 0; i < CACHE_SIZE; i++) {
+        set_addr_bus(PC);
+        SYNC_DELAY();
+        _delay_us(1);
+        inst_cache[i] = read_data_bus();
+        PC++;
+        if (PC >= 128) PC = 0;
+        count++;
+    }
+    return count;
 }
 
 
 // ============================================================================
-//  Output
+//  Output (OUT 명령어 — execute 중 버스 재획득 필요)
+//  Core 2는 SIGNAL_DONE → SIGNAL_BUSY로 버스 재점유 표시
 // ============================================================================
-void output_register(uint8_t value) {
+static void output_register(uint8_t value) {
+    // 버스 재획득 표시
+    SIGNAL_BUSY();
     set_data_output();
     write_data_bus(value);
     SYNC_DELAY();
     _delay_us(50);
     set_data_input();
+    set_high_z();
+    // 출력 완료 후 Core 1에 신호
+    SIGNAL_DONE();
 }
 
 
 // ============================================================================
-//  Execute
+//  Phase 2: Execute from cache (bus NOT required — true parallel window)
 // ============================================================================
-void execute(uint8_t instruction) {
-    uint8_t opcode  = instruction & 0xF0;
-    uint8_t operand = instruction & 0x0F;
+static uint8_t execute_cache(uint8_t count) {
+    uint8_t actual = 0;
+    for (uint8_t i = 0; i < count; i++) {
+        uint8_t opcode  = inst_cache[i] & 0xF0;
+        uint8_t operand = inst_cache[i] & 0x0F;
 
-    switch (opcode) {
-        case OP_NOP:                                    break;
-        case OP_LOAD:   regA  = operand;                break;
-        case OP_ADD:    regA += operand;                break;
-        case OP_SUB:    regA -= operand;                break;
-        case OP_MUL:    regA *= operand;                break;
-        case OP_AND:    regA &= operand;                break;
-        case OP_OR:     regA |= operand;                break;
-        case OP_OUT:    output_register(regA);          break;
-        case OP_FETCH:  regA = slot[operand & 0x0F];    break;
-        case OP_SLOT:   slot[operand & 0x0F] = regA;    break;
+        switch (opcode) {
+            case OP_NOP:                                    break;
+            case OP_LOAD:   regA  = operand;                break;
+            case OP_ADD:    regA += operand;                break;
+            case OP_SUB:    regA -= operand;                break;
+            case OP_MUL:    regA *= operand;                break;
+            case OP_AND:    regA &= operand;                break;
+            case OP_OR:     regA |= operand;                break;
+            case OP_FETCH:  regA = slot[operand & 0x0F];   break;
+            case OP_SLOT:   slot[operand & 0x0F] = regA;   break;
 
-        case OP_PUSH:
-            if (stack_ptr < 8) stack[stack_ptr++] = regA;
-            break;
+            case OP_OUT:
+                output_register(regA);
+                break;
 
-        case OP_POP:
-            if (stack_ptr > 0) regA = stack[--stack_ptr];
-            break;
+            case OP_PUSH:
+                if (stack_ptr < 8) stack[stack_ptr++] = regA;
+                break;
 
-        case OP_SETPAGE:
-            current_page = PAGE_REG & 0b01111111;
-            PC = 0;
-            set_page_595(current_page);
-            break;
+            case OP_POP:
+                if (stack_ptr > 0) regA = stack[--stack_ptr];
+                break;
 
-        case OP_HALT:
-            halted = true;
-            break;
+            case OP_SETPAGE:
+                current_page = PAGE_REG & 0b01111111;
+                PC = 0;
+                set_page_595(current_page);
+                break;
 
-        default: break;
+            case OP_HALT:
+                halted = true;
+                actual++;
+                return actual;
+
+            default: break;
+        }
+        actual++;
     }
+    return actual;
 }
 
 
@@ -366,19 +387,20 @@ void setup() {
     current_page = 0; cached_page = 0xFF; halted = false;
     for (uint8_t i = 0; i < 16; i++) slot[i]  = 0;
     for (uint8_t i = 0; i < 8;  i++) stack[i] = 0;
+    for (uint8_t i = 0; i < CACHE_SIZE; i++) inst_cache[i] = 0;
     PAGE_REG = 0;
 
-    // ★ 595가 구동되기 전 — UART 안전 구간 ★
+    // ★ 595 구동 전 — UART 안전 구간 ★
     timing_load_and_print_eeprom();
 
-    set_page_595(0);    // ← 여기서부터 595 구동 시작
+    set_page_595(0);    // 여기서부터 595 구동
 
-    SIGNAL_DONE();      // initial state: ready
+    SIGNAL_DONE();      // 초기 상태: 준비 완료
 
     timing_init();
     timing_start_window();
 
-    _delay_ms(100);
+    _delay_ms(10);
 }
 
 
@@ -393,24 +415,22 @@ void loop() {
         while (1);
     }
 
+    // ── Phase 1: FETCH (버스 점유 — SIGNAL_BUSY) ─────────────────────────────
     SIGNAL_BUSY();
+    uint8_t fetched = fetch_burst();
 
-    uint8_t actual = 0;
-    for (uint8_t i = 0; i < BURST_SIZE; i++) {
-        execute(fetch());
-        PC++;
-        if (PC >= 128) PC = 0;
-        actual++;
-        if (halted) break;
-    }
+    // 버스 반납 → Core 1에 완료 신호
+    set_high_z();
+    SIGNAL_DONE();
 
-    // ★ HALT 없이도 인터벌 완료 시 즉시 저장 ★
+    // ── Phase 2: EXECUTE (버스 불필요 — Core 1 fetch와 진짜 병렬!) ───────────
+    uint8_t actual = execute_cache(fetched);
+
     if (timing_tick(actual)) {
         timing_save_eeprom();
     }
 
-    set_high_z();
-    SIGNAL_DONE();
-
-    _delay_us(5);   // 딜레이를 좀 줄여보자
+    // Core 2는 루프 맨 위로 돌아가서 바로 다음 fetch 대기
+    // Core 1이 RELEASE_TO_CORE2() 할 때까지 SIGNAL_BUSY()로 대기할 필요 없음
+    // → Core 1의 core2_ready 플래그가 PCINT1 ISR로 관리됨
 }
