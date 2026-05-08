@@ -6,11 +6,11 @@
  * - 명령어 캐시 버퍼 도입 (4바이트)
  * - Fetch 단계와 Execute 단계 완전 분리
  * - Execute 중 버스 불필요 → 진짜 병렬 처리!
- * 
+ *
  * 파이프라인:
  * Phase 1 (Fetch):   버스 획득 → 4개 명령어 읽기 → 버퍼 저장 → 버스 반납
  * Phase 2 (Execute): 버퍼에서 읽어서 실행 (버스 불필요!)
- * 
+ *
  * 이론 성능:
  * - Fetch: 20us (버스 필요)
  * - Execute: 4us (내부 처리, Core 2와 동시 진행!)
@@ -39,7 +39,7 @@
 #define OP_HALT     0xF0
 
 // ─── Cache / burst ────────────────────────────────────────────────────────────
-#define CACHE_SIZE  4   // instructions fetched per bus acquisition
+#define CACHE_SIZE  128   // instructions fetched per bus acquisition. 1page.
 
 // ─── Timing measurement ───────────────────────────────────────────────────────
 #define ENABLE_TIMING
@@ -347,7 +347,7 @@ static uint8_t execute_cache(uint8_t count) {
             case OP_SLOT:   slot[operand & 0x0F] = regA;   break;
 
             case OP_OUT:
-                // ★ 버스 재획득 필요 — Core2 완료 대기 포함 ★
+                // 버스 재획득 필요 — Core2 완료 대기 포함
                 output_register(regA);
                 break;
 

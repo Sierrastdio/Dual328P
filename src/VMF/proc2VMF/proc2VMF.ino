@@ -49,7 +49,7 @@
 #define OP_HALT     0xF0
 
 // ─── Cache / burst ────────────────────────────────────────────────────────────
-#define CACHE_SIZE  4
+#define CACHE_SIZE  128   // instructions fetched per bus acquisition. 1page.
 
 // ─── Timing measurement ───────────────────────────────────────────────────────
 #define ENABLE_TIMING
