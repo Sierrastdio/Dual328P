@@ -302,8 +302,6 @@
 
 ## 비고
 
-- **RESET 라인**: D52 한 핀에서 Core1·Core2 ATmega328P의 RESET핀(1번)을 **공통 연결**. RESET은 Active-LOW이며, 코드에서 `RESET_CORES()`로 LOW → `RELEASE_CORES()`로 HIGH.
-- **A14**: 62256은 15bit 주소(A0–A14)를 가지므로 A14를 뱅크 스위치로 사용해 0x0000–0x3FFF / 0x4000–0x7FFF 두 뱅크를 전환.
 - **PORTL 주소버스 배선 주의**: PORTL bit0(D49, CE#)과 bit1(D48, A14)이 PORTL에 혼재하므로, `set_addr_bus()` 내에서 하위 2비트를 마스크(`& 0b00000011`)하여 보존함.
 - **OE# / WE# 핀 정정**: 기존 핀맵의 D13(OE#)·D12(WE#)는 코드 레지스터 기준으로 **D50(OE#)·D51(WE#)** 이 정확함.
 -----------------------------------------

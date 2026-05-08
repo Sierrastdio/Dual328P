@@ -5,13 +5,11 @@
 * `shared SRAM`
 * `Processor1(ATmega328P)`
 * `Processor2(ATmega328P)`
-* `Arduino Nano(DDU)`
 
 ### parts list:
 | parts type | name | number |
 |-------|-------|-------|
 | MCU   | `Arduino Mega 2560`   | 1 |
-| MCU   | `Arduino Nano`   | 1 |
 | MCU   | `Atmega328P (DIP)`    | 2 |
 | Memory| `62256 SRAM`     | 1 |
 | IC logic | `74HC245`     | 4 |
@@ -37,9 +35,6 @@ The `BPU` is based on `Arduino Mega 2560`. BPU receives binary and program(load)
 
 `Processor 2` is the second processor based on `Atmega328P`. It alternates with Processor 1 to execute instructions using shared RAM.
 
-## 4. DDU (Data Display Unit)
-
-The DDU is the data display unit, using Arduino Nano to display system status or outputs.
 
 ********
 
@@ -137,8 +132,6 @@ Dual328P/
 ├── PinManual.md
 ├── README.md
 │
-├── .vscode/
-│   └── settings.json
 │
 ├── examples/
 │         ├── bench/
@@ -164,31 +157,22 @@ Dual328P/
 │   └── modifiedISP.ino
 │
 └── src/
+      ├── compiler.py
+      │
+      │
       ├── BPU/
-      │   ├── compiler.py
-      │   ├── BPUmega/
-      │   │   └── BPUmega.ino
-      │   └── BPUnano/
-      │       └── BPUnano.ino
+      │   └── BPU.ino
       │
-      ├── DDU/
-      │   ├── DDU128x64/
-      │   │   └── DDU128x64.ino
-      │   └── DDU16x2/
-      │       └── DDU16x2.ino
-      │
-      ├── SMU/
-      │   ├── SMUeditor.py
-      │   ├── SMUmega/
-      │   │   └── SMUmega.ino
-      │   └── SMUnano/
-      │       └── SMUnano.ino
       │
       └── VMF/
           ├── proc1VMF/
           │   └── proc1VMF.ino
-          └── proc2VMF/
-              └── proc2VMF.ino
+          │
+          │── proc2VMF/
+          │    └── proc2VMF.ino
+          │
+          │── procVMF_single/
+               └── procVMF_single.ino
 ```
 
 # License
@@ -202,5 +186,3 @@ This project is under the GNU General Public License v3.0 license. See the `LICE
   Modifications: include 8MHz clock output on D9.
 
   The original copyright notices are preserved in the source code as per the BSD license requirements.
-
-
