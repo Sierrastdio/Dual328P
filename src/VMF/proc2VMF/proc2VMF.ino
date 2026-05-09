@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- * Processor 2 - Virtual Machine Firmware v7.0 (cache memory structure added)
+ * Processor 2 - Virtual Machine Firmware v7.5 (74HC595 fetch 단계 진입 시 즉시 래치)
  * ============================================================================
  *
  * Pin layout:
