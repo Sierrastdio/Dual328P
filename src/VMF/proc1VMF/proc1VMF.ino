@@ -1,6 +1,6 @@
 /*
  * ============================================================================
- * Processor 1 - Virtual Machine Firmware v7.0 (cache memory structure added)
+ * Processor 1 - Virtual Machine Firmware v7.5 (74HC595 fetch 단계 진입 시 즉시 래치)
  * ============================================================================
  * 혁명적 변경:
  * - 명령어 캐시 버퍼 도입 (4바이트)
@@ -38,18 +38,14 @@
 #define OP_SETPAGE  0xE0
 #define OP_HALT     0xF0
 
-// ─── Cache / burst ────────────────────────────────────────────────────────────
-#define CACHE_SIZE  128   // instructions fetched per bus acquisition. 1page.
+// ─── Cache ───────────────────────────────────────────────────────────────────
+#define CACHE_SIZE  128   // 1 page = 128 bytes
 
-// ─── Timing measurement ───────────────────────────────────────────────────────
+// ─── Timing ──────────────────────────────────────────────────────────────────
 #define ENABLE_TIMING
 #define TIMING_INTERVAL  5120UL
 
 // ─── EEPROM layout (10 bytes) ─────────────────────────────────────────────────
-//  0x00~0x03 : timing_result_us
-//  0x04~0x07 : timing_result_instr
-//  0x08      : flag 0xAA = valid
-//  0x09      : regA final value
 #define EEPROM_ADDR_US    ((uint32_t*)0x00)
 #define EEPROM_ADDR_INSTR ((uint32_t*)0x04)
 #define EEPROM_ADDR_FLAG  ((uint8_t*) 0x08)
@@ -67,11 +63,13 @@ volatile bool     halted       = false;
 volatile bool     core2_ready  = true;
 volatile uint8_t  cached_page  = 0xFF;
 
-// ─── Instruction cache ────────────────────────────────────────────────────────
 static uint8_t inst_cache[CACHE_SIZE];
 
 #define PAGE_REG slot[15]
-// slot[14] = TEMP_SLOT (compiler reserved — do NOT use here)
+
+// ─── 595 prefetch state ───────────────────────────────────────────────────────
+static bool    page_pending     = false;
+static uint8_t pending_page_val = 0;
 
 // ─── Hardware macros ─────────────────────────────────────────────────────────
 #define ACTIVATE_CORE1()    PORTC &= ~(1 << 4)
@@ -118,7 +116,7 @@ static bool     _timing_active  = false;
 
 void timing_init() {
     TCCR1A = 0;
-    TCCR1B = (1 << CS11);    // prescaler 8 → 0.5 µs/tick @ 16 MHz
+    TCCR1B = (1 << CS11);
     TIMSK1 = (1 << TOIE1);
     TCNT1  = 0;
     _t1_overflows = 0;
@@ -206,7 +204,7 @@ void timing_load_and_print_eeprom() {
 #define timing_tick(n)                  (false)
 #define timing_save_eeprom()            do {} while(0)
 #define timing_load_and_print_eeprom()  do {} while(0)
-#endif  // ENABLE_TIMING
+#endif
 // ============================================================================
 
 
@@ -219,7 +217,7 @@ ISR(PCINT1_vect) {
 
 
 // ============================================================================
-//  74HC595 page register
+//  74HC595 — 즉시 전환 (초기화 및 SETPAGE 없을 때)
 // ============================================================================
 void set_page_595(uint8_t page) {
     page &= 0b01111111;
@@ -234,6 +232,43 @@ void set_page_595(uint8_t page) {
         HC595_SCK_LOW();
         page <<= 1;
     }
+    HC595_RCK_HIGH();
+    asm volatile("nop\n\t");
+    HC595_RCK_LOW();
+}
+
+// ============================================================================
+//  74HC595 — execute 단계에서 다음 페이지 미리 시프트 (RCK는 LOW 유지)
+//  데이터는 595 시프트 레지스터에 대기, 출력 레지스터엔 반영 안 됨
+// ============================================================================
+static void prefetch_page_595(uint8_t page) {
+    page &= 0b01111111;
+    if (page == cached_page) {
+        page_pending = false;
+        return;
+    }
+    pending_page_val = page;
+    page_pending     = true;
+
+    // 시프트 레지스터에 로드 (RCK LOW 유지 — SRAM은 아직 이전 페이지)
+    HC595_RCK_LOW();
+    for (uint8_t i = 0; i < 7; i++) {
+        if (page & 0b01000000) HC595_SER_HIGH();
+        else                   HC595_SER_LOW();
+        HC595_SCK_HIGH();
+        HC595_SCK_LOW();
+        page <<= 1;
+    }
+    // RCK 펄스 없음 — 값은 시프트 레지스터에만 있음
+}
+
+// ============================================================================
+//  fetch 단계 진입 시 호출 — RCK 펄스 한 번으로 즉시 페이지 전환
+// ============================================================================
+static inline void latch_prefetched_page() {
+    if (!page_pending) return;
+    cached_page  = pending_page_val;
+    page_pending = false;
     HC595_RCK_HIGH();
     asm volatile("nop\n\t");
     HC595_RCK_LOW();
@@ -271,6 +306,7 @@ inline uint8_t read_data_bus() {
 
 // ============================================================================
 //  High-Z
+//  PD0(SER), PD1(SCK), PC3(RCK)는 High-Z 제외 → execute 중 595 구동 가능
 // ============================================================================
 inline void set_high_z() {
     DDRD  &= 0b00000011;  PORTD &= 0b00000011;
@@ -280,37 +316,35 @@ inline void set_high_z() {
 
 
 // ============================================================================
-//  Phase 1: Fetch burst into cache (bus required)
+//  Phase 1: Fetch burst (1 page = 128 bytes)
+//  진입 즉시 prefetch된 페이지 래치 → 지연 없이 새 페이지 접근
 // ============================================================================
 static uint8_t fetch_burst() {
-    // 버스 이미 획득된 상태에서 호출
+    // ★ prefetch된 페이지 주소 즉시 래치 (RCK 펄스 1회) ★
+    latch_prefetched_page();
+
     set_data_input();
     DDRB |= 0b00111100;
     DDRC |= 0b00000111;
 
-    uint8_t count = 0;
     for (uint8_t i = 0; i < CACHE_SIZE; i++) {
         set_addr_bus(PC);
         SYNC_DELAY();
-        _delay_us(1);               // 62256: 100ns max, 1µs = 충분
+        _delay_us(1);
         inst_cache[i] = read_data_bus();
         PC++;
         if (PC >= 128) PC = 0;
-        count++;
     }
-    return count;
+    return CACHE_SIZE;
 }
 
 
 // ============================================================================
-//  Output (OUT 명령어 — execute 중 버스 재획득 필요)
-//  Core2가 버스를 쓰고 있을 수 있으므로 완료 대기 후 획득
+//  Output (OUT — 버스 재획득)
 // ============================================================================
 static void output_register(uint8_t value) {
-    // Core2 완료 대기
     while (!core2_ready) asm volatile("nop");
 
-    // 버스 재획득
     ACTIVATE_CORE1();
     set_data_output();
     write_data_bus(value);
@@ -318,7 +352,6 @@ static void output_register(uint8_t value) {
     _delay_us(50);
     set_data_input();
 
-    // 버스 반납 후 Core2 재개
     set_high_z();
     core2_ready = false;
     RELEASE_TO_CORE2();
@@ -326,8 +359,8 @@ static void output_register(uint8_t value) {
 
 
 // ============================================================================
-//  Phase 2: Execute from cache (bus NOT required — true parallel window)
-//  Returns actual executed count
+//  Phase 2: Execute from cache
+//  SETPAGE → prefetch_page_595() 로 미리 시프트 (RCK 유보)
 // ============================================================================
 static uint8_t execute_cache(uint8_t count) {
     uint8_t actual = 0;
@@ -345,11 +378,7 @@ static uint8_t execute_cache(uint8_t count) {
             case OP_OR:     regA |= operand;                break;
             case OP_FETCH:  regA = slot[operand & 0x0F];   break;
             case OP_SLOT:   slot[operand & 0x0F] = regA;   break;
-
-            case OP_OUT:
-                // 버스 재획득 필요 — Core2 완료 대기 포함
-                output_register(regA);
-                break;
+            case OP_OUT:    output_register(regA);          break;
 
             case OP_PUSH:
                 if (stack_ptr < 8) stack[stack_ptr++] = regA;
@@ -360,10 +389,10 @@ static uint8_t execute_cache(uint8_t count) {
                 break;
 
             case OP_SETPAGE:
-                // 595는 Core1 전용 — 버스 충돌 없음
                 current_page = PAGE_REG & 0b01111111;
                 PC = 0;
-                set_page_595(current_page);
+                // ★ 즉시 전환 대신 시프트 레지스터에 미리 로드 ★
+                prefetch_page_595(current_page);
                 break;
 
             case OP_HALT:
@@ -389,8 +418,8 @@ void setup() {
     DDRD  |= 0b00000011;
     DDRC  |= 0b00001000;
     DDRC  |= 0b00010000;
-    DDRC  &= ~0b00100000;   // PC5 input
-    PORTC &= ~(1 << 5);     // pull-up disabled
+    DDRC  &= ~0b00100000;
+    PORTC &= ~(1 << 5);
 
     PCICR  |= (1 << PCIE1);
     PCMSK1 |= (1 << PCINT13);
@@ -400,14 +429,15 @@ void setup() {
 
     regA = 0x00; PC = 0; stack_ptr = 0;
     current_page = 0; cached_page = 0xFF; halted = false; core2_ready = true;
+    page_pending = false; pending_page_val = 0;
     for (uint8_t i = 0; i < 16; i++) slot[i]  = 0;
     for (uint8_t i = 0; i < 8;  i++) stack[i] = 0;
     for (uint8_t i = 0; i < CACHE_SIZE; i++) inst_cache[i] = 0;
     PAGE_REG = 0;
 
-    timing_load_and_print_eeprom();  // 595 구동 전 UART 안전 구간
+    timing_load_and_print_eeprom();
 
-    set_page_595(0);    // 여기서부터 595 구동
+    set_page_595(0);    // 초기화는 즉시 전환
 
     timing_init();
     timing_start_window();
@@ -427,24 +457,23 @@ void loop() {
         while (1);
     }
 
-    // ── Phase 1: FETCH (버스 점유) ────────────────────────────────────────────
+    // ── Phase 1: Fetch (prefetch 래치 → 즉시 새 페이지 접근) ─────────────────
     ACTIVATE_CORE1();
     uint8_t fetched = fetch_burst();
 
-    // Core2에 버스 넘기기 전에 플래그 초기화 (경쟁 상태 방지)
     core2_ready = false;
     set_high_z();
     RELEASE_TO_CORE2();
 
-    // ── Phase 2: EXECUTE (버스 불필요 — Core2 fetch와 진짜 병렬!) ────────────
+    // ── Phase 2: Execute (병렬 구간 — SETPAGE 시 다음 페이지 미리 시프트) ────
     uint8_t actual = execute_cache(fetched);
 
-    // 타이밍 기록
     if (timing_tick(actual)) {
         timing_save_eeprom();
     }
 
-    // ── 동기화: Core2 완료 대기 ───────────────────────────────────────────────
-    // OUT 명령어가 없었다면 Core2가 아직 실행 중일 수 있음
+    // ── 동기화 ────────────────────────────────────────────────────────────────
     while (!core2_ready) asm volatile("nop");
+
+    ACTIVATE_CORE1();
 }

@@ -48,19 +48,12 @@
 #define OP_SETPAGE  0xE0
 #define OP_HALT     0xF0
 
-// ─── Cache / burst ────────────────────────────────────────────────────────────
-#define CACHE_SIZE  128   // instructions fetched per bus acquisition. 1page.
+#define CACHE_SIZE  128
 
-// ─── Timing measurement ───────────────────────────────────────────────────────
 #define ENABLE_TIMING
 #define TIMING_INTERVAL  5120UL
 
-// ─── EEPROM layout (10 bytes) ─────────────────────────────────────────────────
-//  Core 2 uses offset 0x10 to avoid collision with Core 1 (0x00~0x09)
-//  0x10~0x13 : timing_result_us
-//  0x14~0x17 : timing_result_instr
-//  0x18      : flag 0xAA = valid
-//  0x19      : regA final value
+// ─── EEPROM layout (Core 2 offset 0x10~0x19) ─────────────────────────────────
 #define EEPROM_ADDR_US    ((uint32_t*)0x10)
 #define EEPROM_ADDR_INSTR ((uint32_t*)0x14)
 #define EEPROM_ADDR_FLAG  ((uint8_t*) 0x18)
@@ -77,16 +70,17 @@ volatile uint8_t  current_page = 0;
 volatile bool     halted       = false;
 volatile uint8_t  cached_page  = 0xFF;
 
-// ─── Instruction cache ────────────────────────────────────────────────────────
 static uint8_t inst_cache[CACHE_SIZE];
 
 #define PAGE_REG slot[15]
-// slot[14] = TEMP_SLOT (compiler reserved — do NOT use here)
+
+// ─── 595 prefetch state ───────────────────────────────────────────────────────
+static bool    page_pending     = false;
+static uint8_t pending_page_val = 0;
 
 // ─── Hardware macros ─────────────────────────────────────────────────────────
-// Core 2는 PC5를 출력으로 사용 (Core 1에 완료 신호 전송)
-#define SIGNAL_BUSY()       PORTC &= ~(1 << 5)  // LOW  = 작업 중
-#define SIGNAL_DONE()       PORTC |=  (1 << 5)  // HIGH = 완료
+#define SIGNAL_BUSY()       PORTC &= ~(1 << 5)
+#define SIGNAL_DONE()       PORTC |=  (1 << 5)
 
 #define HC595_SER_HIGH()    PORTD |=  (1 << 0)
 #define HC595_SER_LOW()     PORTD &= ~(1 << 0)
@@ -216,12 +210,12 @@ void timing_load_and_print_eeprom() {
 #define timing_tick(n)                  (false)
 #define timing_save_eeprom()            do {} while(0)
 #define timing_load_and_print_eeprom()  do {} while(0)
-#endif  // ENABLE_TIMING
+#endif
 // ============================================================================
 
 
 // ============================================================================
-//  74HC595 page register
+//  74HC595 — 즉시 전환
 // ============================================================================
 void set_page_595(uint8_t page) {
     page &= 0b01111111;
@@ -236,6 +230,41 @@ void set_page_595(uint8_t page) {
         HC595_SCK_LOW();
         page <<= 1;
     }
+    HC595_RCK_HIGH();
+    asm volatile("nop\n\t");
+    HC595_RCK_LOW();
+}
+
+// ============================================================================
+//  74HC595 — execute 단계 prefetch (RCK 유보)
+// ============================================================================
+static void prefetch_page_595(uint8_t page) {
+    page &= 0b01111111;
+    if (page == cached_page) {
+        page_pending = false;
+        return;
+    }
+    pending_page_val = page;
+    page_pending     = true;
+
+    HC595_RCK_LOW();
+    for (uint8_t i = 0; i < 7; i++) {
+        if (page & 0b01000000) HC595_SER_HIGH();
+        else                   HC595_SER_LOW();
+        HC595_SCK_HIGH();
+        HC595_SCK_LOW();
+        page <<= 1;
+    }
+    // RCK 펄스 없음
+}
+
+// ============================================================================
+//  fetch 단계 진입 시 즉시 래치
+// ============================================================================
+static inline void latch_prefetched_page() {
+    if (!page_pending) return;
+    cached_page  = pending_page_val;
+    page_pending = false;
     HC595_RCK_HIGH();
     asm volatile("nop\n\t");
     HC595_RCK_LOW();
@@ -273,6 +302,7 @@ inline uint8_t read_data_bus() {
 
 // ============================================================================
 //  High-Z
+//  PD0(SER), PD1(SCK), PC3(RCK) 제외 → execute 중 595 구동 가능
 // ============================================================================
 inline void set_high_z() {
     DDRD  &= 0b00000011;  PORTD &= 0b00000011;
@@ -282,14 +312,16 @@ inline void set_high_z() {
 
 
 // ============================================================================
-//  Phase 1: Fetch burst into cache (bus required)
+//  Phase 1: Fetch burst
 // ============================================================================
 static uint8_t fetch_burst() {
+    // ★ prefetch된 페이지 즉시 래치 ★
+    latch_prefetched_page();
+
     set_data_input();
     DDRB |= 0b00111100;
     DDRC |= 0b00000111;
 
-    uint8_t count = 0;
     for (uint8_t i = 0; i < CACHE_SIZE; i++) {
         set_addr_bus(PC);
         SYNC_DELAY();
@@ -297,18 +329,15 @@ static uint8_t fetch_burst() {
         inst_cache[i] = read_data_bus();
         PC++;
         if (PC >= 128) PC = 0;
-        count++;
     }
-    return count;
+    return CACHE_SIZE;
 }
 
 
 // ============================================================================
-//  Output (OUT 명령어 — execute 중 버스 재획득 필요)
-//  Core 2는 SIGNAL_DONE → SIGNAL_BUSY로 버스 재점유 표시
+//  Output (OUT)
 // ============================================================================
 static void output_register(uint8_t value) {
-    // 버스 재획득 표시
     SIGNAL_BUSY();
     set_data_output();
     write_data_bus(value);
@@ -316,13 +345,12 @@ static void output_register(uint8_t value) {
     _delay_us(50);
     set_data_input();
     set_high_z();
-    // 출력 완료 후 Core 1에 신호
     SIGNAL_DONE();
 }
 
 
 // ============================================================================
-//  Phase 2: Execute from cache (bus NOT required — true parallel window)
+//  Phase 2: Execute from cache
 // ============================================================================
 static uint8_t execute_cache(uint8_t count) {
     uint8_t actual = 0;
@@ -340,10 +368,7 @@ static uint8_t execute_cache(uint8_t count) {
             case OP_OR:     regA |= operand;                break;
             case OP_FETCH:  regA = slot[operand & 0x0F];   break;
             case OP_SLOT:   slot[operand & 0x0F] = regA;   break;
-
-            case OP_OUT:
-                output_register(regA);
-                break;
+            case OP_OUT:    output_register(regA);          break;
 
             case OP_PUSH:
                 if (stack_ptr < 8) stack[stack_ptr++] = regA;
@@ -356,7 +381,8 @@ static uint8_t execute_cache(uint8_t count) {
             case OP_SETPAGE:
                 current_page = PAGE_REG & 0b01111111;
                 PC = 0;
-                set_page_595(current_page);
+                // ★ execute 중 다음 페이지 미리 시프트 ★
+                prefetch_page_595(current_page);
                 break;
 
             case OP_HALT:
@@ -381,21 +407,21 @@ void setup() {
     DDRC |= 0b00000111;
     DDRD |= 0b00000011;
     DDRC |= 0b00001000;
-    DDRC |= 0b00100000;  // PC5 output (done signal)
+    DDRC |= 0b00100000;  // PC5 output
 
     regA = 0x00; PC = 0; stack_ptr = 0;
     current_page = 0; cached_page = 0xFF; halted = false;
+    page_pending = false; pending_page_val = 0;
     for (uint8_t i = 0; i < 16; i++) slot[i]  = 0;
     for (uint8_t i = 0; i < 8;  i++) stack[i] = 0;
     for (uint8_t i = 0; i < CACHE_SIZE; i++) inst_cache[i] = 0;
     PAGE_REG = 0;
 
-    // ★ 595 구동 전 — UART 안전 구간 ★
     timing_load_and_print_eeprom();
 
-    set_page_595(0);    // 여기서부터 595 구동
+    set_page_595(0);
 
-    SIGNAL_DONE();      // 초기 상태: 준비 완료
+    SIGNAL_DONE();
 
     timing_init();
     timing_start_window();
@@ -415,22 +441,17 @@ void loop() {
         while (1);
     }
 
-    // ── Phase 1: FETCH (버스 점유 — SIGNAL_BUSY) ─────────────────────────────
+    // ── Phase 1: Fetch ────────────────────────────────────────────────────────
     SIGNAL_BUSY();
     uint8_t fetched = fetch_burst();
 
-    // 버스 반납 → Core 1에 완료 신호
     set_high_z();
     SIGNAL_DONE();
 
-    // ── Phase 2: EXECUTE (버스 불필요 — Core 1 fetch와 진짜 병렬!) ───────────
+    // ── Phase 2: Execute (SETPAGE 시 다음 페이지 미리 시프트) ────────────────
     uint8_t actual = execute_cache(fetched);
 
     if (timing_tick(actual)) {
         timing_save_eeprom();
     }
-
-    // Core 2는 루프 맨 위로 돌아가서 바로 다음 fetch 대기
-    // Core 1이 RELEASE_TO_CORE2() 할 때까지 SIGNAL_BUSY()로 대기할 필요 없음
-    // → Core 1의 core2_ready 플래그가 PCINT1 ISR로 관리됨
 }
