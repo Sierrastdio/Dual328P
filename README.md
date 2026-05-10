@@ -87,6 +87,7 @@ If you don't have an active crystal, you can use this method(both methods need t
    ```powershell
    cd "C:\Users\user\AppData\Local\Arduino15\packages\arduino\tools\avrdude\8.0.0-arduino1\bin"
    ```
+   Note: avrdude `\8.0.0-arduino1\` version will different please check your avrdude version and use yours.
 
    `Verify connection:`
    ```powershell
