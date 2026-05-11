@@ -411,23 +411,23 @@ void setup() {
     // 먼저 모든 핀 입력으로 초기화 (안전 상태)
     set_data_input();
 
-    // 방향 설정 전부 완료
     DDRB  |= 0b00111100;   // address bus output
     DDRC  |= 0b00000111;   // address bus output
     DDRD  |= 0b00000011;   // 595 SER/SCK output
     DDRC  |= 0b00001000;   // PC3 RCK output
-    DDRC  |= 0b00010000;   // PC4 processor select output (Core1)
-    DDRC  &= ~0b00100000;  // PC5 input (Core1) / output (Core2)
-    PORTC &= ~(1 << 5);    // PC5 pull-up off
 
-    // ★ 모든 핀 설정 완료 후 인터럽트 활성화 ★
-    PCICR  |= (1 << PCIE1);
-    PCMSK1 |= (1 << PCINT13);
-    sei();
+    // [수정 포인트]
+    DDRC  &= ~(1 << 4);    // PC4는 입력 (Core 1의 신호를 듣기 위함)
+    DDRC  |=  (1 << 5);    // PC5는 출력 (Core 1에게 완료 신호 보내기)
 
-    regA = 0x00; PC = 0; stack_ptr = 0;
-    current_page = 0; cached_page = 0xFF; halted = false;
-    page_pending = false; pending_page_val = 0;
+    regA = 0x00;
+    PC = 0;
+    stack_ptr = 0;
+    current_page = 0;
+    cached_page = 0xFF;
+    halted = false;
+    page_pending = false;
+    pending_page_val = 0;
     for (uint8_t i = 0; i < 16; i++) slot[i]  = 0;
     for (uint8_t i = 0; i < 8;  i++) stack[i] = 0;
     for (uint8_t i = 0; i < CACHE_SIZE; i++) inst_cache[i] = 0;
@@ -442,7 +442,7 @@ void setup() {
     timing_init();
     timing_start_window();
 
-    _delay_ms(10);
+    _delay_ms(1);
 }
 
 

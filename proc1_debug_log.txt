@@ -47,3 +47,15 @@ FLAG: 0x0 (INVALID — no data)
 아 이번엔 debug 코드의 cache size가 4여서 그런거 같은데 + 595 개선 방식 적용안됨
 쓰벌 깜짝이야;
 ###################################################################
+
+atmp 4: examples/upload_test/upload_test16KB.asm
+        examples/upload_test/upload_test16KB.asm
+
+=== Core 1 EEPROM Dump ===
+FLAG: 0x0 (INVALID — no data)
+
+=== Raw EEPROM (0x00~0x1F) ===
+0x00: 57 36 11 00 00 14 00 00
+0x08: 00 00 00 00 00 00 FF 04
+0x10: 00 00 FF FF FF FF FF FF
+0x18: FF FF FF FF FF FF FF FF
