@@ -24,7 +24,7 @@
 
 // ─── Timing ──────────────────────────────────────────────────────────────────
 #define ENABLE_TIMING
-#define TIMING_INTERVAL   5120UL
+#define TIMING_INTERVAL   16384UL
 
 // ─── Core2 timeout threshold (nop 루프 횟수) ─────────────────────────────────
 // 16MHz 기준 약 100000 nop ≈ 6ms

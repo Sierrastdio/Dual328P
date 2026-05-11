@@ -43,7 +43,7 @@
 
 // ─── Timing ──────────────────────────────────────────────────────────────────
 #define ENABLE_TIMING
-#define TIMING_INTERVAL  5120UL
+#define TIMING_INTERVAL  16384UL
 
 // ─── EEPROM layout (10 bytes) ─────────────────────────────────────────────────
 #define EEPROM_ADDR_US    ((uint32_t*)0x00)
@@ -316,16 +316,17 @@ inline void set_high_z() {
 
 
 // ============================================================================
-//  Phase 1: Fetch burst (1 page = 128 bytes)
-//  진입 즉시 prefetch된 페이지 래치 → 지연 없이 새 페이지 접근
+//  [FIX 1] fetch_burst(): address OUTPUT 설정 후 latch 호출
+//  기존: latch(RCK 조작) → address OUTPUT 설정 (순서 불일치)
+//  수정: address OUTPUT 설정 → latch → fetch 시작
 // ============================================================================
 static uint8_t fetch_burst() {
-    // ★ prefetch된 페이지 주소 즉시 래치 (RCK 펄스 1회) ★
-    latch_prefetched_page();
-
-    set_data_input();
+    // ★ address 핀 먼저 OUTPUT으로 전환 후 latch ★
     DDRB |= 0b00111100;
     DDRC |= 0b00000111;
+    set_data_input();
+
+    latch_prefetched_page();   // address 핀이 output인 상태에서 RCK 조작
 
     for (uint8_t i = 0; i < CACHE_SIZE; i++) {
         set_addr_bus(PC);
@@ -411,16 +412,24 @@ static uint8_t execute_cache(uint8_t count) {
 // ============================================================================
 //  Setup
 // ============================================================================
+// ============================================================================
+//  [FIX 3] setup(): sei() 이전에 모든 핀 방향 완료
+//  기존: 중간에 sei() 호출 시 일부 핀 미설정 상태에서 인터럽트 가능
+// ============================================================================
 void setup() {
+    // 먼저 모든 핀 입력으로 초기화 (안전 상태)
     set_data_input();
-    DDRB  |= 0b00111100;
-    DDRC  |= 0b00000111;
-    DDRD  |= 0b00000011;
-    DDRC  |= 0b00001000;
-    DDRC  |= 0b00010000;
-    DDRC  &= ~0b00100000;
-    PORTC &= ~(1 << 5);
 
+    // 방향 설정 전부 완료
+    DDRB  |= 0b00111100;   // address bus output
+    DDRC  |= 0b00000111;   // address bus output
+    DDRD  |= 0b00000011;   // 595 SER/SCK output
+    DDRC  |= 0b00001000;   // PC3 RCK output
+    DDRC  |= 0b00010000;   // PC4 processor select output (Core1)
+    DDRC  &= ~0b00100000;  // PC5 input (Core1) / output (Core2)
+    PORTC &= ~(1 << 5);    // PC5 pull-up off
+
+    // ★ 모든 핀 설정 완료 후 인터럽트 활성화 ★
     PCICR  |= (1 << PCIE1);
     PCMSK1 |= (1 << PCINT13);
     sei();
