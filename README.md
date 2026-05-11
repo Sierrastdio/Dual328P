@@ -12,11 +12,10 @@
 | MCU   | `Arduino Mega 2560`   | 1 |
 | MCU   | `Atmega328P (DIP)`    | 2 |
 | Memory| `62256 SRAM`     | 1 |
-| IC logic | `74HC245`     | 4 |
+| IC logic | `74HC245`     | 4~6 |
 | IC logic | `74HC595`     | 2 |
 | IC logic | `74HC04`      | 1 |
 | IC logic | `74HC125`     | 1 |
-| IC logic | `74HC165`     | 2 |
 | Oscillator | `Active Crystal 16MHz`   | 1 |
 ********
 -------------
