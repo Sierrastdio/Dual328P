@@ -1,4 +1,7 @@
-atmp 1: bech/dual_0.asm,dual_1.asm
+atmp 1: examples/bench/dual_0.asm,
+        examples/bench/dual_1.asm
+
+실제 연산이 있는 코드.
 
 === Core 1 EEPROM Dump ===
 FLAG: 0x0 (INVALID — no data)
@@ -11,8 +14,10 @@ FLAG: 0x0 (INVALID — no data)
 
 ###################################################################
 
-atmp 2: bench/upload_test/upload_test16KB.asm
-        bench/upload_test/upload_test16KB.asm
+atmp 2: examples/upload_test/upload_test16KB.asm
+        examples/upload_test/upload_test16KB.asm
+
+NOP만 있는 코드.
 
 === Core 1 EEPROM Dump ===
 FLAG: 0x0 (INVALID — no data)
