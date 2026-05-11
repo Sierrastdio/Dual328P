@@ -51,6 +51,8 @@ FLAG: 0x0 (INVALID — no data)
 atmp 4: examples/upload_test/upload_test16KB.asm
         examples/upload_test/upload_test16KB.asm
 
+꼬라지 보니까 atmp4는 아예 실행자체도 제대로 안되는거 같던데 이것도 그냥 atmp3 기록인듯.
+
 === Core 1 EEPROM Dump ===
 FLAG: 0x0 (INVALID — no data)
 
