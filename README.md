@@ -50,8 +50,8 @@ The `BPU` is based on `Arduino Mega 2560`. BPU receives binary and program(load)
         Binary -> Dual328P
 ```
 
-- Processor1,2 `RESET Pin` LOW (use `:rst` `python compiler.py COM6 --monitor`)
-- Load Binary(8bit) in RAM (kill the Serial Monitor and `python src/BPU/compiler.py <filepath> <port> <bank> <page> -b`)
+- Processor1,2 `RESET Pin` LOW (use `:rst` `python src/compiler.py COM6 --monitor`)
+- Load Binary(8bit) in RAM (kill the Serial Monitor and `python src/compiler.py <filepath> <port> <bank> <page> -b`)
 - Processor1,2 `RESET Pin` HIGH (use `:run` on `python compiler.py COM6 --monitor`)
   - -> Processor starts.
 - 1. `Processor 1` Acquire `Bus Mastery` (`Processor 1 PC4` `LOW`; also RAM `A14` on that net)

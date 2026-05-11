@@ -1,0 +1,24 @@
+atmp 1: bech/dual_0.asm,dual_1.asm
+
+=== Core 1 EEPROM Dump ===
+FLAG: 0x0 (INVALID — no data)
+
+=== Raw EEPROM (0x00~0x1F) ===
+0x00: 62 EE 00 00 00 14 00 00
+0x08: 00 00 00 00 00 00 FF 04
+0x10: 00 00 FF FF FF FF FF FF
+0x18: FF FF FF FF FF FF FF FF
+
+###################################################################
+
+atmp 2: bench/upload_test/upload_test16KB.asm
+        bench/upload_test/upload_test16KB.asm
+
+=== Core 1 EEPROM Dump ===
+FLAG: 0x0 (INVALID — no data)
+
+=== Raw EEPROM (0x00~0x1F) ===
+0x00: D3 92 01 00 00 14 00 00
+0x08: 00 00 00 00 00 00 FF 04
+0x10: 00 00 FF FF FF FF FF FF
+0x18: FF FF FF FF FF FF FF FF
