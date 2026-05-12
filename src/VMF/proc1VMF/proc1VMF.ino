@@ -315,18 +315,16 @@ inline void set_high_z() {
 }
 
 
-// ============================================================================
-//  [FIX 1] fetch_burst(): address OUTPUT 설정 후 latch 호출
-//  기존: latch(RCK 조작) → address OUTPUT 설정 (순서 불일치)
-//  수정: address OUTPUT 설정 → latch → fetch 시작
-// ============================================================================
+// ─── auto page traversal state ────────────────────────────────────────────────
+static uint8_t pages_traversed = 0;   // 완료된 페이지 수
+#define TOTAL_PAGES  128               // 16KB / 128바이트
+
 static uint8_t fetch_burst() {
-    // ★ address 핀 먼저 OUTPUT으로 전환 후 latch ★
     DDRB |= 0b00111100;
     DDRC |= 0b00000111;
     set_data_input();
 
-    latch_prefetched_page();   // address 핀이 output인 상태에서 RCK 조작
+    latch_prefetched_page();   // 이전 execute 단계에서 준비된 페이지 즉시 래치
 
     for (uint8_t i = 0; i < CACHE_SIZE; i++) {
         set_addr_bus(PC);
@@ -334,7 +332,20 @@ static uint8_t fetch_burst() {
         _delay_us(1);
         inst_cache[i] = read_data_bus();
         PC++;
-        if (PC >= 128) PC = 0;
+
+        if (PC >= 128) {
+            PC = 0;
+            current_page++;
+            pages_traversed++;
+
+            if (current_page >= TOTAL_PAGES) {
+                current_page = 0;   // 순환 (HALT 쓸 거면 아래 halted = true)
+            }
+
+            // ★ fetch 루프 마지막에 다음 페이지 shift register에 로드
+            //   → execute 단계 내내 대기 → 다음 fetch 진입 시 latch로 즉시 반영
+            prefetch_page_595(current_page);
+        }
     }
     return CACHE_SIZE;
 }
@@ -436,9 +447,16 @@ void setup() {
 
     ACTIVATE_CORE1();
 
-    regA = 0x00; PC = 0; stack_ptr = 0;
-    current_page = 0; cached_page = 0xFF; halted = false; core2_ready = true;
-    page_pending = false; pending_page_val = 0;
+    regA = 0x00; PC = 0;
+    stack_ptr = 0;
+    current_page = 0;
+    cached_page = 0xFF;
+    halted = false;
+    core2_ready = true;
+    page_pending = false;
+    pending_page_val = 0;
+    pages_traversed = 0;
+    current_page    = 0;
     for (uint8_t i = 0; i < 16; i++) slot[i]  = 0;
     for (uint8_t i = 0; i < 8;  i++) stack[i] = 0;
     for (uint8_t i = 0; i < CACHE_SIZE; i++) inst_cache[i] = 0;
