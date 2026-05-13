@@ -32,7 +32,6 @@
 #include <avr/eeprom.h>
 #include <util/delay.h>
 
-// ─── Instruction Set ─────────────────────────────────────────────────────────
 #define OP_NOP      0x00
 #define OP_LOAD     0x10
 #define OP_ADD      0x20
@@ -48,19 +47,18 @@
 #define OP_SETPAGE  0xE0
 #define OP_HALT     0xF0
 
-#define CACHE_SIZE  128
+#define CACHE_SIZE   128
+#define TOTAL_PAGES  128
 
 #define ENABLE_TIMING
 #define TIMING_INTERVAL  16384UL
 
-// ─── EEPROM layout (Core 2 offset 0x10~0x19) ─────────────────────────────────
 #define EEPROM_ADDR_US    ((uint32_t*)0x10)
 #define EEPROM_ADDR_INSTR ((uint32_t*)0x14)
 #define EEPROM_ADDR_FLAG  ((uint8_t*) 0x18)
 #define EEPROM_ADDR_REGA  ((uint8_t*) 0x19)
 #define EEPROM_FLAG_VALID 0xAA
 
-// ─── VM state ─────────────────────────────────────────────────────────────────
 volatile uint8_t  regA         = 0x00;
 volatile uint8_t  slot[16];
 volatile uint8_t  stack[8];
@@ -70,38 +68,32 @@ volatile uint8_t  current_page = 0;
 volatile bool     halted       = false;
 volatile uint8_t  cached_page  = 0xFF;
 
-static uint8_t inst_cache[CACHE_SIZE];
+static uint8_t  inst_cache[CACHE_SIZE];
+static uint8_t  pages_traversed = 0;
 
-#define PAGE_REG slot[15]
-
-// ─── 595 prefetch state ───────────────────────────────────────────────────────
 static bool    page_pending     = false;
 static uint8_t pending_page_val = 0;
 
-// ─── Hardware macros ─────────────────────────────────────────────────────────
-#define SIGNAL_BUSY()       PORTC &= ~(1 << 5)
-#define SIGNAL_DONE()       PORTC |=  (1 << 5)
+#define PAGE_REG slot[15]
 
-#define HC595_SER_HIGH()    PORTD |=  (1 << 0)
-#define HC595_SER_LOW()     PORTD &= ~(1 << 0)
-#define HC595_SCK_HIGH()    PORTD |=  (1 << 1)
-#define HC595_SCK_LOW()     PORTD &= ~(1 << 1)
-#define HC595_RCK_HIGH()    PORTC |=  (1 << 3)
-#define HC595_RCK_LOW()     PORTC &= ~(1 << 3)
+#define SIGNAL_BUSY()    PORTC &= ~(1 << 5)
+#define SIGNAL_DONE()    PORTC |=  (1 << 5)
 
-#define SYNC_DELAY()        asm volatile("nop\n\t nop\n\t nop\n\t nop\n\t")
+#define HC595_SER_HIGH() PORTD |=  (1 << 0)
+#define HC595_SER_LOW()  PORTD &= ~(1 << 0)
+#define HC595_SCK_HIGH() PORTD |=  (1 << 1)
+#define HC595_SCK_LOW()  PORTD &= ~(1 << 1)
+#define HC595_RCK_HIGH() PORTC |=  (1 << 3)
+#define HC595_RCK_LOW()  PORTC &= ~(1 << 3)
+
+#define SYNC_DELAY()     asm volatile("nop\n\t nop\n\t nop\n\t nop\n\t")
 
 
-// ============================================================================
-//  TIMING SUBSYSTEM
-// ============================================================================
 #ifdef ENABLE_TIMING
 
 volatile uint32_t _t1_overflows = 0;
 
-ISR(TIMER1_OVF_vect) {
-    _t1_overflows++;
-}
+ISR(TIMER1_OVF_vect) { _t1_overflows++; }
 
 static inline uint32_t _get_ticks() {
     uint8_t  sreg = SREG;
@@ -115,32 +107,24 @@ static inline uint32_t _get_ticks() {
 
 volatile uint32_t timing_result_us    = 0;
 volatile uint32_t timing_result_instr = 0;
-
-static uint32_t _timing_start   = 0;
-static uint32_t _timing_counted = 0;
-static bool     _timing_active  = false;
+static uint32_t   _timing_start   = 0;
+static uint32_t   _timing_counted = 0;
+static bool       _timing_active  = false;
 
 void timing_init() {
-    TCCR1A = 0;
-    TCCR1B = (1 << CS11);
-    TIMSK1 = (1 << TOIE1);
-    TCNT1  = 0;
-    _t1_overflows = 0;
-    _timing_active = false;
+    TCCR1A = 0; TCCR1B = (1 << CS11); TIMSK1 = (1 << TOIE1);
+    TCNT1 = 0; _t1_overflows = 0; _timing_active = false;
 }
 
 static inline void timing_start_window() {
-    _timing_counted = 0;
-    _timing_start   = _get_ticks();
-    _timing_active  = true;
+    _timing_counted = 0; _timing_start = _get_ticks(); _timing_active = true;
 }
 
-static inline bool timing_tick(uint8_t actual_count) {
+static inline bool timing_tick(uint8_t n) {
     if (!_timing_active) return false;
-    _timing_counted += actual_count;
+    _timing_counted += n;
     if (_timing_counted >= TIMING_INTERVAL) {
-        uint32_t elapsed    = _get_ticks() - _timing_start;
-        timing_result_us    = elapsed >> 1;
+        timing_result_us    = (_get_ticks() - _timing_start) >> 1;
         timing_result_instr = _timing_counted;
         _timing_active = false;
         return true;
@@ -149,23 +133,14 @@ static inline bool timing_tick(uint8_t actual_count) {
 }
 
 static void _uart_init() {
-    UBRR0H = 0;
-    UBRR0L = 103;
+    UBRR0H = 0; UBRR0L = 103;
     UCSR0B = (1 << TXEN0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
 }
-
-static void _uart_putc(char c) {
-    while (!(UCSR0A & (1 << UDRE0)));
-    UDR0 = c;
-}
-
-static void _uart_puts(const char* s) {
-    while (*s) _uart_putc(*s++);
-}
-
+static void _uart_putc(char c) { while (!(UCSR0A & (1 << UDRE0))); UDR0 = c; }
+static void _uart_puts(const char* s) { while (*s) _uart_putc(*s++); }
 static void _uart_putu32(uint32_t v) {
-    if (v == 0) { _uart_putc('0'); return; }
+    if (!v) { _uart_putc('0'); return; }
     char buf[11]; int8_t i = 0;
     while (v) { buf[i++] = '0' + (v % 10); v /= 10; }
     while (i--) _uart_putc(buf[i]);
@@ -180,16 +155,12 @@ void timing_save_eeprom() {
 
 void timing_load_and_print_eeprom() {
     if (eeprom_read_byte(EEPROM_ADDR_FLAG) != EEPROM_FLAG_VALID) return;
-
     uint32_t us    = eeprom_read_dword(EEPROM_ADDR_US);
     uint32_t instr = eeprom_read_dword(EEPROM_ADDR_INSTR);
     uint8_t  rega  = eeprom_read_byte (EEPROM_ADDR_REGA);
-
     _uart_init();
-    _uart_puts("[TIMING] ");
-    _uart_putu32(instr);
-    _uart_puts(" instr in ");
-    _uart_putu32(us);
+    _uart_puts("[TIMING] "); _uart_putu32(instr);
+    _uart_puts(" instr in "); _uart_putu32(us);
     _uart_puts(" us (");
     if (instr > 0) _uart_putu32((us * 1000UL) / instr);
     else           _uart_putc('?');
@@ -197,10 +168,8 @@ void timing_load_and_print_eeprom() {
     _uart_putc("0123456789ABCDEF"[rega >> 4]);
     _uart_putc("0123456789ABCDEF"[rega & 0x0F]);
     _uart_puts("\r\n");
-
     while (!(UCSR0A & (1 << TXC0)));
     UCSR0B &= ~(1 << TXEN0);
-
     eeprom_update_byte(EEPROM_ADDR_FLAG, 0x00);
 }
 
@@ -211,116 +180,72 @@ void timing_load_and_print_eeprom() {
 #define timing_save_eeprom()            do {} while(0)
 #define timing_load_and_print_eeprom()  do {} while(0)
 #endif
-// ============================================================================
 
 
-// ============================================================================
-//  74HC595 — 즉시 전환
-// ============================================================================
 void set_page_595(uint8_t page) {
     page &= 0b01111111;
     if (page == cached_page) return;
     cached_page = page;
-
     HC595_RCK_LOW();
     for (uint8_t i = 0; i < 7; i++) {
-        if (page & 0b01000000) HC595_SER_HIGH();
-        else                   HC595_SER_LOW();
-        HC595_SCK_HIGH();
-        HC595_SCK_LOW();
+        if (page & 0b01000000) HC595_SER_HIGH(); else HC595_SER_LOW();
+        HC595_SCK_HIGH(); HC595_SCK_LOW();
         page <<= 1;
     }
-    HC595_RCK_HIGH();
-    asm volatile("nop\n\t");
-    HC595_RCK_LOW();
+    HC595_RCK_HIGH(); asm volatile("nop\n\t"); HC595_RCK_LOW();
 }
 
-// ============================================================================
-//  74HC595 — execute 단계 prefetch (RCK 유보)
-// ============================================================================
 static void prefetch_page_595(uint8_t page) {
     page &= 0b01111111;
-    if (page == cached_page) {
-        page_pending = false;
-        return;
-    }
+    if (page == cached_page) { page_pending = false; return; }
     pending_page_val = page;
     page_pending     = true;
-
     HC595_RCK_LOW();
     for (uint8_t i = 0; i < 7; i++) {
-        if (page & 0b01000000) HC595_SER_HIGH();
-        else                   HC595_SER_LOW();
-        HC595_SCK_HIGH();
-        HC595_SCK_LOW();
+        if (page & 0b01000000) HC595_SER_HIGH(); else HC595_SER_LOW();
+        HC595_SCK_HIGH(); HC595_SCK_LOW();
         page <<= 1;
     }
-    // RCK 펄스 없음
 }
 
-// ============================================================================
-//  fetch 단계 진입 시 즉시 래치
-// ============================================================================
 static inline void latch_prefetched_page() {
     if (!page_pending) return;
     cached_page  = pending_page_val;
     page_pending = false;
-    HC595_RCK_HIGH();
-    asm volatile("nop\n\t");
-    HC595_RCK_LOW();
+    HC595_RCK_HIGH(); asm volatile("nop\n\t"); HC595_RCK_LOW();
 }
 
 
-// ============================================================================
-//  Address / Data bus
-// ============================================================================
 inline void set_addr_bus(uint8_t addr) {
     addr &= 0b01111111;
     PORTB = (PORTB & 0b11000011) | ((addr & 0b00001111) << 2);
     PORTC = (PORTC & 0b11111000) | ((addr >> 4) & 0b00000111);
 }
-
-inline void set_data_output() {
-    DDRD |= 0b11111100;
-    DDRB |= 0b00000011;
+inline void set_data_output() { DDRD |= 0b11111100; DDRB |= 0b00000011; }
+inline void set_data_input()  {
+    DDRD &= 0b00000011; PORTD &= 0b00000011;
+    DDRB &= 0b11111100; PORTB &= 0b11111100;
 }
-
-inline void set_data_input() {
-    DDRD  &= 0b00000011;  PORTD &= 0b00000011;
-    DDRB  &= 0b11111100;  PORTB &= 0b11111100;
-}
-
 inline void write_data_bus(uint8_t data) {
     PORTD = (PORTD & 0b00000011) | ((data << 2) & 0b11111100);
     PORTB = (PORTB & 0b11111100) | ((data >> 6) & 0b00000011);
 }
-
 inline uint8_t read_data_bus() {
     return ((PIND & 0b11111100) >> 2) | ((PINB & 0b00000011) << 6);
 }
-
-
-// ============================================================================
-//  High-Z
-//  PD0(SER), PD1(SCK), PC3(RCK) 제외 → execute 중 595 구동 가능
-// ============================================================================
 inline void set_high_z() {
-    DDRD  &= 0b00000011;  PORTD &= 0b00000011;
-    DDRB  &= 0b11000000;  PORTB &= 0b11000000;
-    DDRC  &= 0b11111000;  PORTC &= 0b11111000;
+    DDRD &= 0b00000011; PORTD &= 0b00000011;
+    DDRB &= 0b11000000; PORTB &= 0b11000000;
+    DDRC &= 0b11111000; PORTC &= 0b11111000;
 }
 
-
-// ─── auto page traversal state ────────────────────────────────────────────────
-static uint8_t pages_traversed = 0;   // 완료된 페이지 수
-#define TOTAL_PAGES  128               // 16KB / 128바이트
 
 static uint8_t fetch_burst() {
     DDRB |= 0b00111100;
     DDRC |= 0b00000111;
     set_data_input();
 
-    latch_prefetched_page();   // 이전 execute 단계에서 준비된 페이지 즉시 래치
+    latch_prefetched_page();
 
     for (uint8_t i = 0; i < CACHE_SIZE; i++) {
         set_addr_bus(PC);
@@ -331,15 +256,14 @@ static uint8_t fetch_burst() {
 
         if (PC >= 128) {
             PC = 0;
-            current_page++;
             pages_traversed++;
 
-            if (current_page >= TOTAL_PAGES) {
-                current_page = 0;   // 순환 (HALT 쓸 거면 아래 halted = true)
+            if (pages_traversed >= TOTAL_PAGES) {
+                halted = true;
+                return i + 1;
             }
 
-            // ★ fetch 루프 마지막에 다음 페이지 shift register에 로드
-            //   → execute 단계 내내 대기 → 다음 fetch 진입 시 latch로 즉시 반영
+            current_page++;
             prefetch_page_595(current_page);
         }
     }
@@ -347,9 +271,6 @@ static uint8_t fetch_burst() {
 }
 
 
-// ============================================================================
-//  Output (OUT)
-// ============================================================================
 static void output_register(uint8_t value) {
     SIGNAL_BUSY();
     set_data_output();
@@ -362,15 +283,11 @@ static void output_register(uint8_t value) {
 }
 
 
-// ============================================================================
-//  Phase 2: Execute from cache
-// ============================================================================
 static uint8_t execute_cache(uint8_t count) {
     uint8_t actual = 0;
     for (uint8_t i = 0; i < count; i++) {
         uint8_t opcode  = inst_cache[i] & 0xF0;
         uint8_t operand = inst_cache[i] & 0x0F;
-
         switch (opcode) {
             case OP_NOP:                                    break;
             case OP_LOAD:   regA  = operand;                break;
@@ -382,27 +299,21 @@ static uint8_t execute_cache(uint8_t count) {
             case OP_FETCH:  regA = slot[operand & 0x0F];   break;
             case OP_SLOT:   slot[operand & 0x0F] = regA;   break;
             case OP_OUT:    output_register(regA);          break;
-
             case OP_PUSH:
                 if (stack_ptr < 8) stack[stack_ptr++] = regA;
                 break;
-
             case OP_POP:
                 if (stack_ptr > 0) regA = stack[--stack_ptr];
                 break;
-
             case OP_SETPAGE:
                 current_page = PAGE_REG & 0b01111111;
                 PC = 0;
-                // ★ execute 중 다음 페이지 미리 시프트 ★
                 prefetch_page_595(current_page);
                 break;
-
             case OP_HALT:
                 halted = true;
                 actual++;
                 return actual;
-
             default: break;
         }
         actual++;
@@ -411,36 +322,23 @@ static uint8_t execute_cache(uint8_t count) {
 }
 
 
-// ============================================================================
-//  Setup
-// ============================================================================
-// ============================================================================
-//  [FIX 3] setup(): sei() 이전에 모든 핀 방향 완료
-//  기존: 중간에 sei() 호출 시 일부 핀 미설정 상태에서 인터럽트 가능
-// ============================================================================
 void setup() {
-    // 먼저 모든 핀 입력으로 초기화 (안전 상태)
     set_data_input();
 
-    DDRB  |= 0b00111100;   // address bus output
-    DDRC  |= 0b00000111;   // address bus output
-    DDRD  |= 0b00000011;   // 595 SER/SCK output
-    DDRC  |= 0b00001000;   // PC3 RCK output
+    DDRB |= 0b00111100;
+    DDRC |= 0b00000111;
+    DDRD |= 0b00000011;
+    DDRC |= 0b00001000;
+    DDRC &= ~(1 << 4);
+    DDRC |=  (1 << 5);
 
-    // [수정 포인트]
-    DDRC  &= ~(1 << 4);    // PC4는 입력 (Core 1의 신호를 듣기 위함)
-    DDRC  |=  (1 << 5);    // PC5는 출력 (Core 1에게 완료 신호 보내기)
+    sei();
 
-    regA = 0x00;
-    PC = 0;
-    stack_ptr = 0;
-    current_page = 0;
-    cached_page = 0xFF;
+    regA = 0x00; PC = 0; stack_ptr = 0;
+    current_page = 0; cached_page = 0xFF;
     halted = false;
-    page_pending = false;
-    pending_page_val = 0;
+    page_pending = false; pending_page_val = 0;
     pages_traversed = 0;
-    current_page    = 0;
     for (uint8_t i = 0; i < 16; i++) slot[i]  = 0;
     for (uint8_t i = 0; i < 8;  i++) stack[i] = 0;
     for (uint8_t i = 0; i < CACHE_SIZE; i++) inst_cache[i] = 0;
@@ -449,23 +347,16 @@ void setup() {
     timing_load_and_print_eeprom();
 
     set_page_595(0);
-
     SIGNAL_DONE();
 
     timing_init();
     timing_start_window();
 
-    _delay_ms(1);
+    _delay_ms(10);
 }
 
 
-// ============================================================================
-//  [FIX 2] Core 2 loop(): SIGNAL_DONE 후 settle time 추가
-//  기존: SIGNAL_DONE → 즉시 다음 SIGNAL_BUSY
-//  수정: SIGNAL_DONE → 짧은 settle → SIGNAL_BUSY
-//  이유: Core1 PCINT1 인터럽트 처리 전 Core2가 버스 재점유 시도 방지
-// ============================================================================
-void loop() {   // Core 2 전용
+void loop() {
     if (halted) {
         set_high_z();
         SIGNAL_DONE();
@@ -479,9 +370,8 @@ void loop() {   // Core 2 전용
     set_high_z();
     SIGNAL_DONE();
 
-    // ★ Core1 인터럽트 처리 대기 (최소 settle) ★
     asm volatile("nop\n\t nop\n\t nop\n\t nop\n\t"
-                 "nop\n\t nop\n\t nop\n\t nop\n\t");  // ~500ns
+                 "nop\n\t nop\n\t nop\n\t nop\n\t");
 
     uint8_t actual = execute_cache(fetched);
 

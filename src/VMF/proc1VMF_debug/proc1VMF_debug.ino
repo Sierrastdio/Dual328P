@@ -1,9 +1,13 @@
+/*
+ * ============================================================================
+ * Processor 1 - Virtual Machine Firmware v7.5 DEBUG
+ * ============================================================================
+ */
 #include <avr/io.h>
 #include <avr/interrupt.h>
 #include <avr/eeprom.h>
 #include <util/delay.h>
 
-// ─── Instruction Set ─────────────────────────────────────────────────────────
 #define OP_NOP      0x00
 #define OP_LOAD     0x10
 #define OP_ADD      0x20
@@ -19,26 +23,14 @@
 #define OP_SETPAGE  0xE0
 #define OP_HALT     0xF0
 
-// ─── Cache ───────────────────────────────────────────────────────────────────
-#define CACHE_SIZE  128
+#define CACHE_SIZE   128
+#define TOTAL_PAGES  128
 
-// ─── Timing ──────────────────────────────────────────────────────────────────
 #define ENABLE_TIMING
-#define TIMING_INTERVAL   16384UL
-
-// ─── Core2 timeout threshold (nop 루프 횟수) ─────────────────────────────────
-// 16MHz 기준 약 100000 nop ≈ 6ms
+#define TIMING_INTERVAL          16384UL
 #define CORE2_TIMEOUT_THRESHOLD  100000UL
 
-// ─── EEPROM layout (18 bytes) ────────────────────────────────────────────────
-//  0x00~0x03 : timing_result_us
-//  0x04~0x07 : timing_result_instr
-//  0x08      : flag 0xAA = valid
-//  0x09      : regA final value
-//  0x0A      : stack overflow count
-//  0x0B      : stack underflow count
-//  0x0C~0x0D : core2 timeout count
-//  0x0E~0x11 : bus handoff success count
+// ─── EEPROM layout (18 bytes) ─────────────────────────────────────────────────
 #define EEPROM_ADDR_US          ((uint32_t*)0x00)
 #define EEPROM_ADDR_INSTR       ((uint32_t*)0x04)
 #define EEPROM_ADDR_FLAG        ((uint8_t*) 0x08)
@@ -49,7 +41,6 @@
 #define EEPROM_ADDR_HANDOFF     ((uint32_t*)0x0E)
 #define EEPROM_FLAG_VALID       0xAA
 
-// ─── VM state ─────────────────────────────────────────────────────────────────
 volatile uint8_t  regA         = 0x00;
 volatile uint8_t  slot[16];
 volatile uint8_t  stack[8];
@@ -60,9 +51,11 @@ volatile bool     halted       = false;
 volatile bool     core2_ready  = true;
 volatile uint8_t  cached_page  = 0xFF;
 
-static uint8_t inst_cache[CACHE_SIZE];
+static uint8_t  inst_cache[CACHE_SIZE];
+static uint8_t  pages_traversed = 0;
 
-#define PAGE_REG slot[15]
+static bool    page_pending     = false;
+static uint8_t pending_page_val = 0;
 
 // ─── Debug counters ───────────────────────────────────────────────────────────
 static uint8_t  dbg_stack_overflow  = 0;
@@ -70,7 +63,8 @@ static uint8_t  dbg_stack_underflow = 0;
 static uint16_t dbg_core2_timeout   = 0;
 static uint32_t dbg_bus_handoff     = 0;
 
-// ─── Hardware macros ─────────────────────────────────────────────────────────
+#define PAGE_REG slot[15]
+
 #define ACTIVATE_CORE1()    PORTC &= ~(1 << 4)
 #define RELEASE_TO_CORE2()  PORTC |=  (1 << 4)
 #define IS_CORE2_DONE()     (PINC & (1 << 5))
@@ -91,10 +85,7 @@ static uint32_t dbg_bus_handoff     = 0;
 #ifdef ENABLE_TIMING
 
 volatile uint32_t _t1_overflows = 0;
-
-ISR(TIMER1_OVF_vect) {
-    _t1_overflows++;
-}
+ISR(TIMER1_OVF_vect) { _t1_overflows++; }
 
 static inline uint32_t _get_ticks() {
     uint8_t  sreg = SREG;
@@ -108,32 +99,22 @@ static inline uint32_t _get_ticks() {
 
 volatile uint32_t timing_result_us    = 0;
 volatile uint32_t timing_result_instr = 0;
-
-static uint32_t _timing_start   = 0;
-static uint32_t _timing_counted = 0;
-static bool     _timing_active  = false;
+static uint32_t   _timing_start   = 0;
+static uint32_t   _timing_counted = 0;
+static bool       _timing_active  = false;
 
 void timing_init() {
-    TCCR1A = 0;
-    TCCR1B = (1 << CS11);
-    TIMSK1 = (1 << TOIE1);
-    TCNT1  = 0;
-    _t1_overflows = 0;
-    _timing_active = false;
+    TCCR1A = 0; TCCR1B = (1 << CS11); TIMSK1 = (1 << TOIE1);
+    TCNT1 = 0; _t1_overflows = 0; _timing_active = false;
 }
-
 static inline void timing_start_window() {
-    _timing_counted = 0;
-    _timing_start   = _get_ticks();
-    _timing_active  = true;
+    _timing_counted = 0; _timing_start = _get_ticks(); _timing_active = true;
 }
-
-static inline bool timing_tick(uint8_t actual_count) {
+static inline bool timing_tick(uint8_t n) {
     if (!_timing_active) return false;
-    _timing_counted += actual_count;
+    _timing_counted += n;
     if (_timing_counted >= TIMING_INTERVAL) {
-        uint32_t elapsed    = _get_ticks() - _timing_start;
-        timing_result_us    = elapsed >> 1;
+        timing_result_us    = (_get_ticks() - _timing_start) >> 1;
         timing_result_instr = _timing_counted;
         _timing_active = false;
         return true;
@@ -141,31 +122,20 @@ static inline bool timing_tick(uint8_t actual_count) {
     return false;
 }
 
-// ── UART ─────────────────────────────────────────────────────────────────────
 static void _uart_init() {
-    UBRR0H = 0;
-    UBRR0L = 103;
+    UBRR0H = 0; UBRR0L = 103;
     UCSR0B = (1 << TXEN0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
 }
-
-static void _uart_putc(char c) {
-    while (!(UCSR0A & (1 << UDRE0)));
-    UDR0 = c;
-}
-
-static void _uart_puts(const char* s) {
-    while (*s) _uart_putc(*s++);
-}
-
+static void _uart_putc(char c) { while (!(UCSR0A & (1 << UDRE0))); UDR0 = c; }
+static void _uart_puts(const char* s) { while (*s) _uart_putc(*s++); }
 static void _uart_putu32(uint32_t v) {
-    if (v == 0) { _uart_putc('0'); return; }
+    if (!v) { _uart_putc('0'); return; }
     char buf[11]; int8_t i = 0;
     while (v) { buf[i++] = '0' + (v % 10); v /= 10; }
     while (i--) _uart_putc(buf[i]);
 }
 
-// ── EEPROM save ───────────────────────────────────────────────────────────────
 void timing_save_eeprom() {
     eeprom_update_dword(EEPROM_ADDR_US,         timing_result_us);
     eeprom_update_dword(EEPROM_ADDR_INSTR,      timing_result_instr);
@@ -177,10 +147,8 @@ void timing_save_eeprom() {
     eeprom_update_byte (EEPROM_ADDR_FLAG,       EEPROM_FLAG_VALID);
 }
 
-// ── EEPROM load + print ───────────────────────────────────────────────────────
 void timing_load_and_print_eeprom() {
     if (eeprom_read_byte(EEPROM_ADDR_FLAG) != EEPROM_FLAG_VALID) return;
-
     uint32_t us      = eeprom_read_dword(EEPROM_ADDR_US);
     uint32_t instr   = eeprom_read_dword(EEPROM_ADDR_INSTR);
     uint8_t  rega    = eeprom_read_byte (EEPROM_ADDR_REGA);
@@ -188,14 +156,9 @@ void timing_load_and_print_eeprom() {
     uint8_t  s_udf   = eeprom_read_byte (EEPROM_ADDR_STK_UDF);
     uint16_t c2_tout = eeprom_read_word (EEPROM_ADDR_C2_TIMEOUT);
     uint32_t handoff = eeprom_read_dword(EEPROM_ADDR_HANDOFF);
-
     _uart_init();
-
-    // 타이밍
-    _uart_puts("[TIMING] ");
-    _uart_putu32(instr);
-    _uart_puts(" instr in ");
-    _uart_putu32(us);
+    _uart_puts("[TIMING] "); _uart_putu32(instr);
+    _uart_puts(" instr in "); _uart_putu32(us);
     _uart_puts(" us (");
     if (instr > 0) _uart_putu32((us * 1000UL) / instr);
     else           _uart_putc('?');
@@ -203,21 +166,13 @@ void timing_load_and_print_eeprom() {
     _uart_putc("0123456789ABCDEF"[rega >> 4]);
     _uart_putc("0123456789ABCDEF"[rega & 0x0F]);
     _uart_puts("\r\n");
-
-    // 디버그
-    _uart_puts("[DEBUG] stack_ovf=");
-    _uart_putu32(s_ovf);
-    _uart_puts(" stack_udf=");
-    _uart_putu32(s_udf);
-    _uart_puts(" c2_timeout=");
-    _uart_putu32(c2_tout);
-    _uart_puts(" bus_handoff=");
-    _uart_putu32(handoff);
+    _uart_puts("[DEBUG] stk_ovf="); _uart_putu32(s_ovf);
+    _uart_puts(" stk_udf=");        _uart_putu32(s_udf);
+    _uart_puts(" c2_timeout=");     _uart_putu32(c2_tout);
+    _uart_puts(" handoff=");        _uart_putu32(handoff);
     _uart_puts("\r\n");
-
     while (!(UCSR0A & (1 << TXC0)));
     UCSR0B &= ~(1 << TXEN0);
-
     eeprom_update_byte(EEPROM_ADDR_FLAG, 0x00);
 }
 
@@ -227,86 +182,87 @@ void timing_load_and_print_eeprom() {
 #define timing_tick(n)                  (false)
 #define timing_save_eeprom()            do {} while(0)
 #define timing_load_and_print_eeprom()  do {} while(0)
-#endif  // ENABLE_TIMING
+#endif
 // ============================================================================
 
 
-// ============================================================================
-//  ISR — Core 2 done signal
-// ============================================================================
-ISR(PCINT1_vect) {
-    if (IS_CORE2_DONE()) core2_ready = true;
-}
+ISR(PCINT1_vect) { if (IS_CORE2_DONE()) core2_ready = true; }
 
 
 // ============================================================================
-//  74HC595 page register
+//  74HC595
 // ============================================================================
 void set_page_595(uint8_t page) {
     page &= 0b01111111;
     if (page == cached_page) return;
     cached_page = page;
-
     HC595_RCK_LOW();
     for (uint8_t i = 0; i < 7; i++) {
-        if (page & 0b01000000) HC595_SER_HIGH();
-        else                   HC595_SER_LOW();
-        HC595_SCK_HIGH();
-        HC595_SCK_LOW();
+        if (page & 0b01000000) HC595_SER_HIGH(); else HC595_SER_LOW();
+        HC595_SCK_HIGH(); HC595_SCK_LOW();
         page <<= 1;
     }
-    HC595_RCK_HIGH();
-    asm volatile("nop\n\t");
+    HC595_RCK_HIGH(); asm volatile("nop\n\t"); HC595_RCK_LOW();
+}
+
+static void prefetch_page_595(uint8_t page) {
+    page &= 0b01111111;
+    if (page == cached_page) { page_pending = false; return; }
+    pending_page_val = page;
+    page_pending     = true;
     HC595_RCK_LOW();
+    for (uint8_t i = 0; i < 7; i++) {
+        if (page & 0b01000000) HC595_SER_HIGH(); else HC595_SER_LOW();
+        HC595_SCK_HIGH(); HC595_SCK_LOW();
+        page <<= 1;
+    }
+    // RCK 유보
+}
+
+static inline void latch_prefetched_page() {
+    if (!page_pending) return;
+    cached_page  = pending_page_val;
+    page_pending = false;
+    HC595_RCK_HIGH(); asm volatile("nop\n\t"); HC595_RCK_LOW();
 }
 
 
 // ============================================================================
-//  Address / Data bus
+//  Bus helpers
 // ============================================================================
 inline void set_addr_bus(uint8_t addr) {
     addr &= 0b01111111;
     PORTB = (PORTB & 0b11000011) | ((addr & 0b00001111) << 2);
     PORTC = (PORTC & 0b11111000) | ((addr >> 4) & 0b00000111);
 }
-
-inline void set_data_output() {
-    DDRD |= 0b11111100;
-    DDRB |= 0b00000011;
+inline void set_data_output() { DDRD |= 0b11111100; DDRB |= 0b00000011; }
+inline void set_data_input()  {
+    DDRD &= 0b00000011; PORTD &= 0b00000011;
+    DDRB &= 0b11111100; PORTB &= 0b11111100;
 }
-
-inline void set_data_input() {
-    DDRD  &= 0b00000011;  PORTD &= 0b00000011;
-    DDRB  &= 0b11111100;  PORTB &= 0b11111100;
-}
-
 inline void write_data_bus(uint8_t data) {
     PORTD = (PORTD & 0b00000011) | ((data << 2) & 0b11111100);
     PORTB = (PORTB & 0b11111100) | ((data >> 6) & 0b00000011);
 }
-
 inline uint8_t read_data_bus() {
     return ((PIND & 0b11111100) >> 2) | ((PINB & 0b00000011) << 6);
 }
-
-
-// ============================================================================
-//  High-Z
-// ============================================================================
 inline void set_high_z() {
-    DDRD  &= 0b00000011;  PORTD &= 0b00000011;
-    DDRB  &= 0b11000000;  PORTB &= 0b11000000;
-    DDRC  &= 0b11111000;  PORTC &= 0b11111000;
+    DDRD &= 0b00000011; PORTD &= 0b00000011;
+    DDRB &= 0b11000000; PORTB &= 0b11000000;
+    DDRC &= 0b11111000; PORTC &= 0b11111000;
 }
 
 
 // ============================================================================
-//  Phase 1: Fetch burst
+//  Phase 1: Fetch burst (auto page traversal + 595 prefetch)
 // ============================================================================
 static uint8_t fetch_burst() {
-    set_data_input();
     DDRB |= 0b00111100;
     DDRC |= 0b00000111;
+    set_data_input();
+
+    latch_prefetched_page();   // 직전 execute에서 준비된 페이지 즉시 래치
 
     for (uint8_t i = 0; i < CACHE_SIZE; i++) {
         set_addr_bus(PC);
@@ -314,25 +270,36 @@ static uint8_t fetch_burst() {
         _delay_us(1);
         inst_cache[i] = read_data_bus();
         PC++;
-        if (PC >= 128) PC = 0;
+
+        if (PC >= 128) {
+            PC = 0;
+            pages_traversed++;
+
+            // ★ Auto HALT ★
+            if (pages_traversed >= TOTAL_PAGES) {
+                halted = true;
+                return i + 1;
+            }
+
+            current_page++;
+            prefetch_page_595(current_page);   // ★ 다음 페이지 미리 시프트 ★
+        }
     }
     return CACHE_SIZE;
 }
 
 
 // ============================================================================
-//  Output (OUT — 버스 재획득)
+//  Output (OUT)
 // ============================================================================
 static void output_register(uint8_t value) {
     while (!core2_ready) asm volatile("nop");
-
     ACTIVATE_CORE1();
     set_data_output();
     write_data_bus(value);
     SYNC_DELAY();
     _delay_us(50);
     set_data_input();
-
     set_high_z();
     core2_ready = false;
     RELEASE_TO_CORE2();
@@ -347,7 +314,6 @@ static uint8_t execute_cache(uint8_t count) {
     for (uint8_t i = 0; i < count; i++) {
         uint8_t opcode  = inst_cache[i] & 0xF0;
         uint8_t operand = inst_cache[i] & 0x0F;
-
         switch (opcode) {
             case OP_NOP:                                    break;
             case OP_LOAD:   regA  = operand;                break;
@@ -361,27 +327,19 @@ static uint8_t execute_cache(uint8_t count) {
             case OP_OUT:    output_register(regA);          break;
 
             case OP_PUSH:
-                if (stack_ptr < 8) {
-                    stack[stack_ptr++] = regA;
-                } else {
-                    // ★ 스택 오버플로 감지 ★
-                    if (dbg_stack_overflow < 0xFF) dbg_stack_overflow++;
-                }
+                if (stack_ptr < 8) { stack[stack_ptr++] = regA; }
+                else { if (dbg_stack_overflow < 0xFF) dbg_stack_overflow++; }
                 break;
 
             case OP_POP:
-                if (stack_ptr > 0) {
-                    regA = stack[--stack_ptr];
-                } else {
-                    // ★ 스택 언더플로 감지 ★
-                    if (dbg_stack_underflow < 0xFF) dbg_stack_underflow++;
-                }
+                if (stack_ptr > 0) { regA = stack[--stack_ptr]; }
+                else { if (dbg_stack_underflow < 0xFF) dbg_stack_underflow++; }
                 break;
 
             case OP_SETPAGE:
                 current_page = PAGE_REG & 0b01111111;
                 PC = 0;
-                set_page_595(current_page);
+                prefetch_page_595(current_page);   // ★ prefetch (즉시 전환 아님) ★
                 break;
 
             case OP_HALT:
@@ -417,25 +375,21 @@ void setup() {
     ACTIVATE_CORE1();
 
     regA = 0x00; PC = 0; stack_ptr = 0;
-    current_page = 0; cached_page = 0xFF; halted = false; core2_ready = true;
+    current_page = 0; cached_page = 0xFF;
+    halted = false; core2_ready = true;
+    page_pending = false; pending_page_val = 0;
+    pages_traversed = 0;
+    dbg_stack_overflow = 0; dbg_stack_underflow = 0;
+    dbg_core2_timeout  = 0; dbg_bus_handoff     = 0;
     for (uint8_t i = 0; i < 16; i++) slot[i]  = 0;
     for (uint8_t i = 0; i < 8;  i++) stack[i] = 0;
     for (uint8_t i = 0; i < CACHE_SIZE; i++) inst_cache[i] = 0;
     PAGE_REG = 0;
 
-    // 디버그 카운터 초기화
-    dbg_stack_overflow  = 0;
-    dbg_stack_underflow = 0;
-    dbg_core2_timeout   = 0;
-    dbg_bus_handoff     = 0;
-
     timing_load_and_print_eeprom();
-
     set_page_595(0);
-
     timing_init();
     timing_start_window();
-
     _delay_ms(10);
 }
 
@@ -451,7 +405,6 @@ void loop() {
         while (1);
     }
 
-    // ── Phase 1: Fetch ────────────────────────────────────────────────────────
     ACTIVATE_CORE1();
     uint8_t fetched = fetch_burst();
 
@@ -459,27 +412,22 @@ void loop() {
     set_high_z();
     RELEASE_TO_CORE2();
 
-    // ── Phase 2: Execute (병렬 구간) ──────────────────────────────────────────
     uint8_t actual = execute_cache(fetched);
 
     if (timing_tick(actual)) {
         timing_save_eeprom();
     }
 
-    // ── 동기화: Core2 완료 대기 + 타임아웃 감지 ★ ────────────────────────────
+    // ── 동기화: Core2 완료 대기 + 타임아웃 감지 ──────────────────────────────
     uint32_t wait_count = 0;
     while (!core2_ready) {
         asm volatile("nop");
-        wait_count++;
-        if (wait_count >= CORE2_TIMEOUT_THRESHOLD) {
-            // ★ 타임아웃 — 카운트 후 계속 대기 (강제 진행 안 함) ★
+        if (++wait_count >= CORE2_TIMEOUT_THRESHOLD) {
             if (dbg_core2_timeout < 0xFFFF) dbg_core2_timeout++;
             wait_count = 0;
         }
     }
 
-    // ★ 버스 권한 전환 성공 ★
     dbg_bus_handoff++;
-
     ACTIVATE_CORE1();
 }
