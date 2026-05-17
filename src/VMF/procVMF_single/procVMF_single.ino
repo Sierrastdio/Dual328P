@@ -262,7 +262,7 @@ static uint8_t fetch() {
     DDRC |= 0b00000111;
     set_addr_bus(PC);
     SYNC_DELAY();
-    _delay_us(5);   // 듀얼(1µs)보다 의도적으로 보수적 — 공정 비교
+    _delay_us(1);
     return read_data_bus();
 }
 
@@ -353,7 +353,7 @@ void setup() {
     timing_init();
     timing_start_window();
 
-    _delay_ms(100);  // 듀얼(10ms)보다 보수적 — 공정 비교
+    _delay_ms(10);
 }
 
 
