@@ -12,7 +12,7 @@
 | MCU   | `Arduino Mega 2560`   | 1 |
 | MCU   | `Atmega328P (DIP)`    | 2 |
 | Memory| `62256 SRAM`     | 1 |
-| IC logic | `74HC245`     | 4~6 |
+| IC logic | `74HC245`     | 6 |
 | IC logic | `74HC595`     | 2 |
 | IC logic | `74HC04`      | 1 |
 | IC logic | `74HC125`     | 1 |
@@ -116,7 +116,7 @@ If you don't have an active crystal, you can use this method(both methods need t
    ```
 
 # Usage
-1. Connect the BPU to the PC.
+1. Connect the BPU(Arduino Mega 2560) to the PC.
 2. Write code in your PC, compile to binary and send to BPU.
 3. BPU will load the binary to RAM.
 4. when you use `:run` to BPU, Processors will start to work.
@@ -163,15 +163,21 @@ Dual328P/
       ├── BPU/
       │   └── BPU.ino
       │
+      ├── EEPROMcheck/
+      │   └── EEPROMcheck.ino
+      │
       │
       └── VMF/
           ├── proc1VMF/
           │   └── proc1VMF.ino
           │
-          │── proc2VMF/
-          │    └── proc2VMF.ino
+          ├── proc1VMF_debug/
+          │   └── proc1VMF_debug.ino
           │
-          │── procVMF_single/
+          ├── proc2VMF/
+          │   └── proc2VMF.ino
+          │
+          └── procVMF_single/
                └── procVMF_single.ino
 ```
 
