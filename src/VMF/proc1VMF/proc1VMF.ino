@@ -68,8 +68,8 @@ static uint8_t pending_page_val = 0;
 
 #define PAGE_REG slot[15]
 
-#define ACTIVATE_CORE1()    PORTC &= ~(1 << 4)
-#define RELEASE_TO_CORE2()  PORTC |=  (1 << 4)
+#define ACTIVATE_CORE1()    PORTC |=  (1 << 4)
+#define RELEASE_TO_CORE2()  PORTC &=  ~(1 << 4)
 #define IS_CORE2_DONE()     (PINC & (1 << 5))
 
 #define HC595_SER_HIGH()    PORTD |=  (1 << 0)
