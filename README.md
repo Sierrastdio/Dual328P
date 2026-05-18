@@ -171,9 +171,6 @@ Dual328P/
           ├── proc1VMF/
           │   └── proc1VMF.ino
           │
-          ├── proc1VMF_debug/
-          │   └── proc1VMF_debug.ino
-          │
           ├── proc2VMF/
           │   └── proc2VMF.ino
           │

@@ -183,6 +183,13 @@ void loop() {
     if (cmd == ":run") {
         core1_timing[0] = '\0';
         core2_timing[0] = '\0';
+
+        // 버스 해제 — 코어 부팅 전에 Mega를 High-Z로
+        DDRA  = 0x00; PORTA = 0x00;  // 데이터버스 입력
+        DDRC  = 0x00; PORTC = 0x00;  // 주소버스 입력
+        DDRL  = 0b00000011;           // A14/CE만 출력 유지, 나머지 입력
+        RAM_CE_DISABLE();
+
         RELEASE_CORES();
         Serial.println(F("RUN"));
         return;
